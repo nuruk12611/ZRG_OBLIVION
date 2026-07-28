@@ -1,0 +1,2 @@
+# ZRG Oblivion Bot uses Python standard library only.
+# Keep this file for hosting platforms that require requirements.txt.

@@ -1,0 +1,17 @@
+name: zrg-oblivion-bot
+services:
+  - name: bot
+    type: worker
+    git:
+      branch: main
+    build:
+      builder: buildpack
+      build_command: pip install -r requirements.txt
+    run_command: python bot.py
+    env:
+      - key: BOT_TOKEN
+        value: ""
+      - key: ADMIN_IDS
+        value: ""
+      - key: CLAN_NAME
+        value: ZRG OBLIVION
