@@ -97,7 +97,7 @@ ANTIFLOOD_SECONDS = int(os.getenv("ANTIFLOOD_SECONDS", "5") or "5")
 AUTO_ACCEPT_SECONDS = int(os.getenv("AUTO_ACCEPT_SECONDS", str(3 * 60 * 60)) or str(3 * 60 * 60))
 REAPPLY_COOLDOWN_SECONDS = int(os.getenv("REAPPLY_COOLDOWN_SECONDS", str(2 * 60 * 60)) or str(2 * 60 * 60))
 KEEP_PROCESSED_SECONDS = int(os.getenv("KEEP_PROCESSED_SECONDS", str(3 * 24 * 60 * 60)) or str(3 * 24 * 60 * 60))
-BOT_VERSION = "zrg_oblivion2_simba_admin_2026_07_28"
+BOT_VERSION = "zrg_oblivion3_no_academy_min5_2026_07_28"
 
 # Для хостингов с persistent volume можно поставить DATA_DIR=/data.
 # Если /data уже есть и доступна на запись — используем её автоматически.
@@ -597,7 +597,7 @@ def can_submit_application(user_id: int) -> Tuple[bool, str]:
         return False, "⏳ У тебя уже есть заявка на рассмотрении. Дождись решения администрации."
     rejected = [x for x in user_apps if x.get("status") == "rejected"]
     if len(rejected) >= 2:
-        return False, "🚫 Тебе запрещено подавать заявки в академию после повторного отказа. Обратись в техподдержку."
+        return False, "🚫 Тебе запрещено подавать заявки в клан после повторного отказа. Обратись в техподдержку."
     if rejected:
         last = max(parse_time_str(x.get("updated_at") or x.get("created_at")) for x in rejected)
         left = int(REAPPLY_COOLDOWN_SECONDS - (time.time() - last))
@@ -824,7 +824,7 @@ def kb(rows: List[List[Dict[str, str]]]) -> Dict[str, Any]:
 def menu_keyboard(user_id: int) -> Dict[str, Any]:
     rows = [
         [btn("🛡️ О клане", "menu:about"), btn("📝 Заявка в клан", "menu:apply")],
-        [btn("🎓 Академия", "menu:academy"), btn("🎧 Техподдержка", "menu:support")],
+        [btn("🎧 Техподдержка", "menu:support")],
         [btn("📣 Обжалование мута", "menu:unmute")],
     ]
     if is_admin(user_id):
@@ -1038,7 +1038,7 @@ def send_main_menu(chat_id: int, user_id: int) -> None:
     name = user_name_from_rec(user_id)
     text = (
         f"👋 <b>{escape(name)}</b>, с возвращением!\n\n"
-        "🏷 <b>Академия ZRG_Oblivion</b>\n"
+        "🏷 <b>Клан ZRG_Oblivion</b>\n"
         "Бот для <b>подачи заявок в клан</b>.\n"
         "Также есть <b>техподдержка</b> и <b>обжалование мута</b>.\n\n"
         "━━━━━━━━━━━━━━━━\n"
@@ -1089,16 +1089,13 @@ def send_about(chat_id: int, user_id: int) -> None:
 
 
 def send_academy(chat_id: int, user_id: int) -> None:
+    # Раздел «Академия» убран: теперь у нас только заявки в клан.
     text = (
-        f"<b>🎓 {escape(CLAN_NAME)} Академия</b>\n\n"
-        "Академия — место для игроков, которые хотят подтянуть игру, командное взаимодействие и дисциплину.\n\n"
-        "<b>Подходит, если:</b>\n"
-        "• хочешь попасть в основной состав\n"
-        "• готов тренироваться\n"
-        "• нужен опыт игры в команде\n\n"
-        "Чтобы начать — подай заявку, а администраторы решат, куда тебя направить."
+        "📝 <b>Заявка в клан ZRG_Oblivion</b>\n\n"
+        "Раздел «Академия» больше не используется.\n"
+        "Если хочешь вступить — подай заявку в клан."
     )
-    send_local_photo(chat_id, "menu.jpg", text, reply_markup=kb([[btn("📝 Подать заявку", "menu:apply")], [btn("🏠 Меню", "menu:home")]]))
+    send_local_photo(chat_id, "apply.jpg", text, reply_markup=kb([[btn("📝 Подать заявку в клан", "menu:apply")], [btn("🏠 Меню", "menu:home")]]))
 
 
 def send_admin_denied(chat_id: int, user_id: int) -> None:
@@ -1157,7 +1154,7 @@ APPLICATION_FIELDS = [
         "📝 <b>Шаг 5/5</b>\n"
         "Теперь опишите, почему вы хотите именно к нам в клан.\n\n"
         "После ответа появится кнопка <b>✅ Отправить</b>.\n"
-        "Можно написать до <b>100 слов</b>. Если ответ будет слишком короткий, бот попросит описать подробнее.",
+        "Минимум <b>5 слов</b>. Если хочешь — можешь написать больше, до <b>100 слов</b>.",
     ),
 ]
 FIELD_INDEX = {key: i for i, (key, _, _) in enumerate(APPLICATION_FIELDS)}
@@ -1241,8 +1238,8 @@ def validate_application_field(key: str, value: str) -> Tuple[bool, str, str]:
         return True, value, ""
     if key == "motivation":
         words = re.findall(r"\S+", value)
-        if len(words) <= 15:
-            return False, value, "Опишите подробнее, почему вы хотите попасть к нам в клан. Нужно больше 15 слов."
+        if len(words) < 5:
+            return False, value, "Опишите чуть подробнее, почему вы хотите попасть к нам в клан. Нужно минимум 5 слов."
         if len(words) > 100:
             return False, value, f"Слишком длинно: {len(words)} слов. Максимум 100 слов. Сократи текст и отправь ещё раз:"
         return True, value, ""
@@ -1664,7 +1661,7 @@ def send_application_categories(chat_id: int) -> None:
     approved_count = sum(1 for x in apps if application_matches_category(x, "approved"))
     rejected_count = sum(1 for x in apps if application_matches_category(x, "rejected"))
     text = (
-        "📥 <b>Список заявок в академию</b>\n\n"
+        "📥 <b>Список заявок в клан</b>\n\n"
         "Выбери список. Внутри будут только кнопки с заявками.\n"
         "После нажатия на заявку откроются кнопки принять / отклонить / ответить / мут / бан."
     )
@@ -1721,7 +1718,7 @@ def format_application_item(item: Dict[str, Any]) -> str:
     user_id = int(item.get("user_id") or 0)
     status = STATUS_LABELS.get(item.get("status", "new"), item.get("status", "new"))
     text = [
-        f"<b>📝 Заявка в академию #{item.get('id')}</b>",
+        f"<b>📝 Заявка в клан #{item.get('id')}</b>",
         f"<b>Статус:</b> {escape(status)}",
         f"<b>Дата:</b> {escape(str(item.get('created_at', '—')))}",
         f"<b>Пользователь:</b> {user_link(user_id, item.get('full_name') or str(user_id))}",
@@ -1826,7 +1823,7 @@ def send_admin_panel(chat_id: int, user_id: int) -> None:
 
 def admin_send_list(chat_id: int, kind: str) -> None:
     mapping = {
-        "applications": ("applications.json", "application", "📥 Заявки в академию"),
+        "applications": ("applications.json", "application", "📥 Заявки в клан"),
         "tickets": ("tickets.json", "ticket", "🎧 Техподдержка"),
         "appeals": ("appeals.json", "appeal", "📣 Обжалования мута"),
     }
@@ -2142,7 +2139,7 @@ def handle_admin_action(cq: Dict[str, Any]) -> None:
                 edit_message_reply_markup(chat_id, message_id)
             if target_user:
                 if previous_rejects + 1 >= 2:
-                    user_text = "❌ Заявка отклонена повторно. Подача заявок в академию для вас закрыта."
+                    user_text = "❌ Заявка отклонена повторно. Подача заявок в клан для вас закрыта."
                 else:
                     user_text = "❌ Заявка отклонена. Повторно подать заявку можно через 2 часа."
                 try: send_message(target_user, user_text, reply_markup=back_keyboard(target_user))
