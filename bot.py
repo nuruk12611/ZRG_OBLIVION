@@ -70,10 +70,23 @@ def parse_ids(raw: str) -> set[int]:
     return ids
 
 
+def parse_usernames(raw: str) -> set[str]:
+    names: set[str] = set()
+    for part in re.split(r"[,\s;]+", raw.strip()):
+        name = part.strip().lstrip("@").lower()
+        if name:
+            names.add(name)
+    return names
+
+
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_IDS = parse_ids(os.getenv("ADMIN_IDS", ""))
+# Username-admins get access after they open the bot once, because Telegram
+# sends username only inside user messages/callbacks. Default owner username:
+# @Simba253
+ADMIN_USERNAMES = parse_usernames(os.getenv("ADMIN_USERNAMES", "Simba253"))
 CLAN_NAME = os.getenv("CLAN_NAME", "ZRG OBLIVION").strip() or "ZRG OBLIVION"
 BOT_TITLE = os.getenv("BOT_TITLE", "ZRG Oblivion Bot").strip() or "ZRG Oblivion Bot"
 CLAN_TAG = os.getenv("CLAN_TAG", "ZRG").strip() or "ZRG"
@@ -84,7 +97,7 @@ ANTIFLOOD_SECONDS = int(os.getenv("ANTIFLOOD_SECONDS", "5") or "5")
 AUTO_ACCEPT_SECONDS = int(os.getenv("AUTO_ACCEPT_SECONDS", str(3 * 60 * 60)) or str(3 * 60 * 60))
 REAPPLY_COOLDOWN_SECONDS = int(os.getenv("REAPPLY_COOLDOWN_SECONDS", str(2 * 60 * 60)) or str(2 * 60 * 60))
 KEEP_PROCESSED_SECONDS = int(os.getenv("KEEP_PROCESSED_SECONDS", str(3 * 24 * 60 * 60)) or str(3 * 24 * 60 * 60))
-BOT_VERSION = "zrg_oblivion1_admin_update_2026_07_28"
+BOT_VERSION = "zrg_oblivion2_simba_admin_2026_07_28"
 
 # Для хостингов с persistent volume можно поставить DATA_DIR=/data.
 # Если /data уже есть и доступна на запись — используем её автоматически.
@@ -423,9 +436,21 @@ def save_roles(roles: Dict[str, Any]) -> None:
     write_json("roles.json", roles)
 
 
+def is_username_admin(user_id: int) -> bool:
+    if not ADMIN_USERNAMES:
+        return False
+    rec = get_user(user_id)
+    username = str(rec.get("username") or "").lstrip("@").lower()
+    return bool(username and username in ADMIN_USERNAMES)
+
+
 def is_owner(user_id: int) -> bool:
     roles = get_roles()
-    return int(user_id) in ADMIN_IDS or int(user_id) in {int(x) for x in roles.get("owners", []) if str(x).lstrip("-").isdigit()}
+    return (
+        int(user_id) in ADMIN_IDS
+        or is_username_admin(user_id)
+        or int(user_id) in {int(x) for x in roles.get("owners", []) if str(x).lstrip("-").isdigit()}
+    )
 
 
 def grant_admin(user_id: int, by_admin: Optional[int] = None, username: Optional[str] = None) -> None:
@@ -452,6 +477,15 @@ def all_admin_ids() -> List[int]:
     for key in roles.get("admins", {}).keys():
         if str(key).lstrip("-").isdigit():
             ids.add(int(key))
+
+    # Include username-admins after they have written to the bot at least once.
+    users = read_json("users.json", {})
+    for uid, rec in users.items():
+        if not str(uid).lstrip("-").isdigit() or not isinstance(rec, dict):
+            continue
+        username = str(rec.get("username") or "").lstrip("@").lower()
+        if username and username in ADMIN_USERNAMES:
+            ids.add(int(uid))
     return sorted(ids)
 
 
@@ -1469,6 +1503,7 @@ def admin_panel_text() -> str:
         return sum(1 for x in items if x.get("status") in statuses)
 
     admins = all_admin_ids()
+    admin_names = ", ".join("@" + name for name in sorted(ADMIN_USERNAMES))
     return (
         f"🛡 <b>Админ-панель</b>\n"
         f"Тег доступа: <code>{escape(ADMIN_TAG)}</code>\n\n"
@@ -1479,7 +1514,7 @@ def admin_panel_text() -> str:
         "• 🔇 Мут 1ч — нельзя писать боту 1 час\n"
         "• ⛔️ Отключить доступ\n"
         "• ✅ Разбан / снять\n"
-        "• 👑 Выдать / снять admin\n\n"
+        "• 👑 Выдать / снять админку\n\n"
         "⏱️ <b>Авто-принятие:</b> если заявку не разобрать за 3 ч,\n"
         "бот сам напишет: «Вы успешно приняты… вот ссылка»\n"
         f"Ссылка: {ACCEPT_INVITE_LINK}\n\n"
@@ -1488,7 +1523,8 @@ def admin_panel_text() -> str:
         f"Антифлуд: <b>{ANTIFLOOD_SECONDS} сек</b>.\n\n"
         f"🎧 Техподдержка: {count(tickets, {'new', 'reviewing', 'answered'})} активных / {len(tickets)} всего\n"
         f"📣 Муты: {count(appeals, {'new', 'reviewing'})} активных / {len(appeals)} всего\n"
-        f"👑 Админы: {', '.join(str(x) for x in admins) or 'не настроены'}"
+        f"👑 Админы ID: {', '.join(str(x) for x in admins) or 'пока нет'}\n"
+        f"👤 Админы username: {escape(admin_names) if admin_names else 'не настроены'}"
     )
 
 
@@ -1499,7 +1535,7 @@ def admin_panel_keyboard() -> Dict[str, Any]:
             [btn("📣 Обжалования", "admin:list:appeals"), btn("♻️ Что обновлено", "admin:rewrite")],
             [btn("🚫 Бан", "admin:prompt:ban"), btn("🔇 Мут 1ч", "admin:prompt:mute")],
             [btn("⛔️ Отключить доступ", "admin:prompt:disable"), btn("✅ Разбан / снять", "admin:prompt:unban")],
-            [btn("👑 Выдать admin", "admin:prompt:grant_admin"), btn("➖ Снять admin", "admin:prompt:revoke_admin")],
+            [btn("👑 Выдать админку", "admin:prompt:grant_admin"), btn("➖ Снять админку", "admin:prompt:revoke_admin")],
             [btn("👥 Участников клана", "admin:prompt:set_members"), btn("📦 Экспорт JSON", "admin:export")],
             [btn("🔄 Обновить", "admin:panel"), btn("🏠 Главное меню", "menu:home")],
         ]
@@ -1701,8 +1737,8 @@ def prompt_target(chat_id: int, admin_id: int, action: str) -> None:
         "mute": "🔇 Мут 1ч",
         "disable": "⛔️ Отключить доступ",
         "unban": "✅ Разбан / снять",
-        "grant_admin": "👑 Выдать admin",
-        "revoke_admin": "➖ Снять admin",
+        "grant_admin": "👑 Выдать админку",
+        "revoke_admin": "➖ Снять админку",
         "set_members": "👥 Участников клана",
     }
     set_state(admin_id, {"flow": "admin_target", "action": action, "created_at": now_str()})
