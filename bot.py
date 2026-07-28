@@ -1155,9 +1155,9 @@ APPLICATION_FIELDS = [
         "motivation",
         "Почему хотите к нам",
         "📝 <b>Шаг 5/5</b>\n"
-        "Расскажи, почему хочешь попасть именно к нам в клан.\n\n"
-        "Можно написать до <b>100 слов</b>. Если ответ будет слишком короткий, бот попросит описать подробнее.\n\n"
-        "Отмена — /cancel",
+        "Теперь опишите, почему вы хотите именно к нам в клан.\n\n"
+        "После ответа появится кнопка <b>✅ Отправить</b>.\n"
+        "Можно написать до <b>100 слов</b>. Если ответ будет слишком короткий, бот попросит описать подробнее.",
     ),
 ]
 FIELD_INDEX = {key: i for i, (key, _, _) in enumerate(APPLICATION_FIELDS)}
@@ -1169,21 +1169,37 @@ GAME_MODE_OPTIONS = {
 }
 
 
+def application_step_keyboard(step: str) -> Optional[Dict[str, Any]]:
+    """Keyboard for application steps.
+
+    No cancel/menu buttons here by request. /cancel still works as a command.
+    """
+    if step == "nickname":
+        return None
+    return kb([[btn("⬅️ Вернуться", "form:app:back")]])
+
+
 def role_keyboard() -> Dict[str, Any]:
     return kb(
         [
             [btn("🏆 Ranked", "role:ranked"), btn("🚇 Метро", "role:metro")],
             [btn("⚔️ TDM", "role:tdm"), btn("👥 Соло/дуо/сквад+", "role:squad_plus")],
-            [btn("❌ Отмена", "form:cancel")],
+            [btn("⬅️ Вернуться", "form:app:back")],
         ]
     )
 
 
-def application_prompt(step: str) -> str:
-    for key, _, prompt in APPLICATION_FIELDS:
+def application_prompt(step: str, state: Optional[Dict[str, Any]] = None) -> str:
+    prompt = "Ответь на вопрос анкеты:"
+    for key, _, item_prompt in APPLICATION_FIELDS:
         if key == step:
-            return prompt
-    return "Ответь на вопрос анкеты:"
+            prompt = item_prompt
+            break
+    if state:
+        current = (state.get("answers") or {}).get(step)
+        if current:
+            prompt += f"\n\n<b>Текущий ответ:</b> {escape(str(current))}\nНапиши новый ответ, если хочешь изменить."
+    return prompt
 
 
 def start_application(chat_id: int, user_id: int) -> None:
@@ -1193,7 +1209,7 @@ def start_application(chat_id: int, user_id: int) -> None:
         return
     state = {"flow": "application", "step": "nickname", "answers": {}, "created_at": now_str()}
     set_state(user_id, state)
-    send_local_photo(chat_id, "apply.jpg", application_prompt("nickname"), reply_markup=cancel_keyboard())
+    send_local_photo(chat_id, "apply.jpg", application_prompt("nickname", state), reply_markup=application_step_keyboard("nickname"))
 
 
 def validate_application_field(key: str, value: str) -> Tuple[bool, str, str]:
@@ -1243,9 +1259,9 @@ def application_summary(answers: Dict[str, Any], title: str = "Анкета") ->
 def ask_next_application_step(chat_id: int, user_id: int, state: Dict[str, Any]) -> None:
     step = state.get("step")
     if step == "mode":
-        send_message(chat_id, application_prompt(step), reply_markup=role_keyboard())
+        send_message(chat_id, application_prompt(step, state), reply_markup=role_keyboard())
     else:
-        send_message(chat_id, application_prompt(step), reply_markup=cancel_keyboard())
+        send_message(chat_id, application_prompt(step, state), reply_markup=application_step_keyboard(step))
 
 
 def process_application_message(message: Dict[str, Any], state: Dict[str, Any]) -> None:
@@ -1263,12 +1279,12 @@ def process_application_message(message: Dict[str, Any], state: Dict[str, Any]) 
         send_message(chat_id, "Анкета сброшена. Начни заново через меню.", reply_markup=menu_keyboard(user_id))
         return
     if not text:
-        send_message(chat_id, "Нужно отправить ответ текстом.", reply_markup=cancel_keyboard())
+        send_message(chat_id, "Нужно отправить ответ текстом.", reply_markup=application_step_keyboard(step))
         return
 
     ok, value, error = validate_application_field(step, text)
     if not ok:
-        send_message(chat_id, escape(error), reply_markup=cancel_keyboard())
+        send_message(chat_id, escape(error), reply_markup=application_step_keyboard(step))
         return
 
     answers = state.setdefault("answers", {})
@@ -1285,8 +1301,39 @@ def process_application_message(message: Dict[str, Any], state: Dict[str, Any]) 
 
 
 def confirm_application_keyboard() -> Dict[str, Any]:
-    return kb([[btn("✅ Отправить", "form:app:confirm"), btn("❌ Отмена", "form:cancel")]])
+    return kb([[btn("✅ Отправить", "form:app:confirm")], [btn("⬅️ Вернуться и изменить", "form:app:back")]])
 
+
+def handle_application_back(cq: Dict[str, Any]) -> None:
+    callback_id = cq.get("id", "")
+    user = cq.get("from", {})
+    user_id = int(user.get("id"))
+    chat_id = int(cq.get("message", {}).get("chat", {}).get("id", user_id))
+
+    state = get_state(user_id)
+    if not state or state.get("flow") != "application":
+        answer_callback(callback_id, "Активная заявка не найдена.", True)
+        return
+
+    step = state.get("step")
+    if step == "confirm":
+        prev_step = APPLICATION_FIELDS[-1][0]
+    elif step in FIELD_INDEX and FIELD_INDEX[step] > 0:
+        prev_step = APPLICATION_FIELDS[FIELD_INDEX[step] - 1][0]
+    else:
+        answer_callback(callback_id, "Ты уже на первом шаге.")
+        send_message(chat_id, application_prompt("nickname", state), reply_markup=application_step_keyboard("nickname"))
+        return
+
+    state["step"] = prev_step
+    set_state(user_id, state)
+    answer_callback(callback_id, "Вернулись назад")
+
+    text = application_prompt(prev_step, state)
+    if prev_step == "mode":
+        send_message(chat_id, text, reply_markup=role_keyboard())
+    else:
+        send_message(chat_id, text, reply_markup=application_step_keyboard(prev_step))
 
 def process_role_callback(cq: Dict[str, Any]) -> None:
     callback_id = cq.get("id", "")
@@ -1302,10 +1349,17 @@ def process_role_callback(cq: Dict[str, Any]) -> None:
         answer_callback(callback_id, "Эта кнопка уже неактивна.")
         return
     state.setdefault("answers", {})["mode"] = role
-    state["step"] = "confirm"
-    set_state(user_id, state)
-    answer_callback(callback_id, "Режим выбран")
-    send_message(chat_id, application_summary(state["answers"], "Проверь заявку"), reply_markup=confirm_application_keyboard())
+    idx = FIELD_INDEX["mode"]
+    if idx + 1 < len(APPLICATION_FIELDS):
+        state["step"] = APPLICATION_FIELDS[idx + 1][0]
+        set_state(user_id, state)
+        answer_callback(callback_id, "Режим выбран")
+        ask_next_application_step(chat_id, user_id, state)
+    else:
+        state["step"] = "confirm"
+        set_state(user_id, state)
+        answer_callback(callback_id, "Режим выбран")
+        send_message(chat_id, application_summary(state["answers"], "Проверь заявку"), reply_markup=confirm_application_keyboard())
 
 
 def finalize_application(cq: Dict[str, Any]) -> None:
@@ -1547,8 +1601,14 @@ def admin_action_keyboard(kind: str, item: Dict[str, Any]) -> Dict[str, Any]:
     user_id = int(item.get("user_id") or 0)
     rows: List[List[Dict[str, str]]] = []
     if kind == "application":
-        rows.append([btn("👀 Взять", f"admin:application:take:{item_id}"), btn("✅ Принять", f"admin:application:approve:{item_id}"), btn("❌ Отклонить", f"admin:application:reject:{item_id}")])
-        rows.append([btn("💬 Ответить", f"admin:application:reply:{item_id}")])
+        status = str(item.get("status") or "new")
+        if status in {"new", "reviewing", "answered"}:
+            rows.append([btn("👀 Взять", f"admin:application:take:{item_id}"), btn("✅ Принять", f"admin:application:approve:{item_id}"), btn("❌ Отклонить", f"admin:application:reject:{item_id}")])
+            rows.append([btn("💬 Ответить", f"admin:application:reply:{item_id}")])
+        else:
+            rows.append([btn("♻️ Восстановить заявку", f"admin:application:restore:{item_id}")])
+            rows.append([btn("💬 Ответить", f"admin:application:reply:{item_id}")])
+        rows.append([btn("⬅️ К спискам заявок", "admin:list:applications")])
     elif kind == "ticket":
         rows.append([btn("👀 Взять", f"admin:ticket:take:{item_id}"), btn("💬 Ответить", f"admin:ticket:reply:{item_id}"), btn("✅ Закрыть", f"admin:ticket:close:{item_id}")])
     elif kind == "appeal":
@@ -1568,6 +1628,93 @@ def application_visible(item: Dict[str, Any]) -> bool:
     ts = parse_time_str(item.get("updated_at") or item.get("created_at"))
     return not ts or (time.time() - ts) <= KEEP_PROCESSED_SECONDS
 
+
+def application_nickname(item: Dict[str, Any]) -> str:
+    answers = item.get("answers") or {}
+    return str(
+        answers.get("nickname")
+        or item.get("username")
+        or item.get("full_name")
+        or f"ID {item.get('user_id', item.get('id', '—'))}"
+    )
+
+
+def application_category_title(category: str) -> str:
+    return {
+        "new": "🆕 Недавно поданные",
+        "approved": "✅ Принятые",
+        "rejected": "❌ Отклонённые",
+    }.get(category, "📥 Заявки")
+
+
+def application_matches_category(item: Dict[str, Any], category: str) -> bool:
+    status = str(item.get("status") or "new")
+    if category == "new":
+        return status in {"new", "reviewing", "answered"}
+    if category == "approved":
+        return status in {"approved", "auto_approved"}
+    if category == "rejected":
+        return status == "rejected"
+    return True
+
+
+def send_application_categories(chat_id: int) -> None:
+    apps = read_json("applications.json", [])
+    new_count = sum(1 for x in apps if application_matches_category(x, "new"))
+    approved_count = sum(1 for x in apps if application_matches_category(x, "approved"))
+    rejected_count = sum(1 for x in apps if application_matches_category(x, "rejected"))
+    text = (
+        "📥 <b>Список заявок в академию</b>\n\n"
+        "Выбери список. Внутри будут только кнопки с заявками.\n"
+        "После нажатия на заявку откроются кнопки принять / отклонить / ответить / мут / бан."
+    )
+    keyboard = kb(
+        [
+            [btn(f"🆕 Недавно поданные ({new_count})", "admin:apps:new")],
+            [btn(f"✅ Принятые ({approved_count})", "admin:apps:approved")],
+            [btn(f"❌ Отклонённые ({rejected_count})", "admin:apps:rejected")],
+            [btn("🛡 Админ-панель", "admin:panel")],
+        ]
+    )
+    send_message(chat_id, text, reply_markup=keyboard)
+
+
+def send_application_category(chat_id: int, category: str) -> None:
+    apps = read_json("applications.json", [])
+    items = [x for x in apps if application_matches_category(x, category)]
+    items = sorted(items, key=lambda x: -int(x.get("id") or 0))
+    title = application_category_title(category)
+    if not items:
+        send_message(chat_id, f"<b>{title}</b>\n\nЗаявок в этом списке нет.", reply_markup=kb([[btn("⬅️ Назад к спискам", "admin:list:applications")], [btn("🛡 Админ-панель", "admin:panel")]]))
+        return
+
+    rows: List[List[Dict[str, str]]] = []
+    for item in items[:50]:
+        item_id = int(item.get("id") or 0)
+        nick = application_nickname(item)
+        status = str(item.get("status") or "new")
+        if status == "reviewing" and item.get("reviewer_id"):
+            text = f"👀 Заявка уже рассматривается администратором — {nick}"
+        elif category == "new":
+            text = f"📝 Нажмите чтобы рассмотреть заявку — {nick}"
+        elif category == "approved":
+            text = f"✅ Принятая заявка — {nick}"
+        else:
+            text = f"❌ Отклонённая заявка — {nick}"
+        if len(text) > 60:
+            text = text[:57] + "…"
+        rows.append([btn(text, f"admin:appview:{item_id}")])
+    rows.append([btn("⬅️ Назад к спискам", "admin:list:applications")])
+    rows.append([btn("🛡 Админ-панель", "admin:panel")])
+    send_message(chat_id, f"<b>{title}</b>\n\nНажмите на заявку, чтобы открыть карточку.", reply_markup=kb(rows))
+
+
+def send_application_detail(chat_id: int, item_id: int) -> None:
+    item = get_item("applications.json", item_id)
+    if not item:
+        send_message(chat_id, "Заявка не найдена.", reply_markup=kb([[btn("⬅️ Назад к спискам", "admin:list:applications")]]))
+        return
+    send_message(chat_id, format_application_item(item), reply_markup=admin_action_keyboard("application", item))
 
 def format_application_item(item: Dict[str, Any]) -> str:
     answers = item.get("answers") or {}
@@ -1687,9 +1834,10 @@ def admin_send_list(chat_id: int, kind: str) -> None:
         send_message(chat_id, "Неизвестный список.", reply_markup=admin_panel_keyboard())
         return
     filename, item_kind, title = mapping[kind]
-    items = read_json(filename, [])
     if item_kind == "application":
-        items = [x for x in items if application_visible(x)]
+        send_application_categories(chat_id)
+        return
+    items = read_json(filename, [])
     if not items:
         send_message(chat_id, f"<b>{title}</b>\nСписок пуст.", reply_markup=admin_panel_keyboard())
         return
@@ -1874,6 +2022,20 @@ def handle_admin_action(cq: Dict[str, Any]) -> None:
         answer_callback(callback_id, "Введите цель")
         prompt_target(chat_id, admin_id, action)
         return
+    if data.startswith("admin:apps:"):
+        category = parts[2] if len(parts) > 2 else "new"
+        answer_callback(callback_id, "Список заявок")
+        send_application_category(chat_id, category)
+        return
+    if data.startswith("admin:appview:"):
+        try:
+            item_id = int(parts[2])
+        except Exception:
+            answer_callback(callback_id, "Неверный ID", True)
+            return
+        answer_callback(callback_id, "Заявка")
+        send_application_detail(chat_id, item_id)
+        return
     if data.startswith("admin:list:"):
         kind = parts[2] if len(parts) > 2 else ""
         answer_callback(callback_id, "Список")
@@ -1936,6 +2098,27 @@ def handle_admin_action(cq: Dict[str, Any]) -> None:
         return
 
     if kind == "application":
+        if action == "restore":
+            old_status = str(item.get("status") or "new")
+            item["status"] = "new"
+            item["restored_from"] = old_status
+            item["restored_by"] = admin_id
+            item["restored_at"] = now_str()
+            item["created_at"] = now_str()
+            item.pop("admin_id", None)
+            item.pop("admin_username", None)
+            item.pop("reviewer_id", None)
+            item.pop("reviewer_name", None)
+            item["updated_at"] = now_str()
+            write_json(filename, items)
+            answer_callback(callback_id, "Заявка восстановлена")
+            send_message(chat_id, f"♻️ Заявка #{item_id} восстановлена и снова находится в недавно поданных.", reply_markup=admin_action_keyboard("application", item))
+            if target_user:
+                try:
+                    send_message(target_user, "♻️ Ваша заявка восстановлена администрацией и снова находится на рассмотрении.", reply_markup=back_keyboard(target_user))
+                except Exception as e:
+                    logging.error("Cannot notify restored user %s: %s", target_user, e)
+            return
         if item.get("status") not in {"new", "reviewing", "answered"}:
             answer_callback(callback_id, "Заявка уже обработана", True)
             return
@@ -2104,6 +2287,9 @@ def handle_callback(cq: Dict[str, Any]) -> None:
     if data == "menu:unmute":
         answer_callback(callback_id, "Обжалование мута")
         start_unmute(chat_id, user_id)
+        return
+    if data == "form:app:back":
+        handle_application_back(cq)
         return
     if data == "form:cancel":
         answer_callback(callback_id, "Отменено")
