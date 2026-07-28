@@ -76,6 +76,15 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_IDS = parse_ids(os.getenv("ADMIN_IDS", ""))
 CLAN_NAME = os.getenv("CLAN_NAME", "ZRG OBLIVION").strip() or "ZRG OBLIVION"
 BOT_TITLE = os.getenv("BOT_TITLE", "ZRG Oblivion Bot").strip() or "ZRG Oblivion Bot"
+CLAN_TAG = os.getenv("CLAN_TAG", "ZRG").strip() or "ZRG"
+ADMIN_TAG = os.getenv("ADMIN_TAG", "admin").strip() or "admin"
+ACCEPT_INVITE_LINK = os.getenv("ACCEPT_INVITE_LINK", "https://t.me/+mY85Yv-Z0iAwN2Ni").strip() or "https://t.me/+mY85Yv-Z0iAwN2Ni"
+DEFAULT_CLAN_MEMBERS = int(os.getenv("CLAN_MEMBERS", "59") or "59")
+ANTIFLOOD_SECONDS = int(os.getenv("ANTIFLOOD_SECONDS", "5") or "5")
+AUTO_ACCEPT_SECONDS = int(os.getenv("AUTO_ACCEPT_SECONDS", str(3 * 60 * 60)) or str(3 * 60 * 60))
+REAPPLY_COOLDOWN_SECONDS = int(os.getenv("REAPPLY_COOLDOWN_SECONDS", str(2 * 60 * 60)) or str(2 * 60 * 60))
+KEEP_PROCESSED_SECONDS = int(os.getenv("KEEP_PROCESSED_SECONDS", str(3 * 24 * 60 * 60)) or str(3 * 24 * 60 * 60))
+BOT_VERSION = "zrg_oblivion1_admin_update_2026_07_28"
 
 # Для хостингов с persistent volume можно поставить DATA_DIR=/data.
 # Если /data уже есть и доступна на запись — используем её автоматически.
@@ -133,6 +142,9 @@ def bootstrap_runtime_dirs() -> None:
         "applications.json": [],
         "tickets.json": [],
         "appeals.json": [],
+        "roles.json": {"admins": {}, "owners": []},
+        "moderation.json": {"users": {}},
+        "settings.json": {"clan_members": DEFAULT_CLAN_MEMBERS, "last_event": "—"},
     }
     for filename, default in defaults.items():
         path = DATA_DIR / filename
@@ -342,8 +354,222 @@ def set_verified(user_id: int, value: bool) -> None:
     save_user(user_id, rec)
 
 
+def parse_time_str(value: Any) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if not value:
+        return 0.0
+    text = str(value).strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return datetime.strptime(text[:19], fmt).timestamp()
+        except Exception:
+            pass
+    return 0.0
+
+
+def human_wait(seconds: int) -> str:
+    seconds = max(0, int(seconds))
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    if hours and minutes:
+        return f"{hours} ч {minutes} мин"
+    if hours:
+        return f"{hours} ч"
+    if minutes:
+        return f"{minutes} мин"
+    return f"{seconds} сек"
+
+
+def get_settings() -> Dict[str, Any]:
+    settings = read_json("settings.json", {})
+    if not isinstance(settings, dict):
+        settings = {}
+    if "clan_members" not in settings:
+        settings["clan_members"] = DEFAULT_CLAN_MEMBERS
+    if "last_event" not in settings:
+        settings["last_event"] = "—"
+    return settings
+
+
+def save_settings(settings: Dict[str, Any]) -> None:
+    write_json("settings.json", settings)
+
+
+def get_clan_members() -> int:
+    try:
+        return int(get_settings().get("clan_members", DEFAULT_CLAN_MEMBERS))
+    except Exception:
+        return DEFAULT_CLAN_MEMBERS
+
+
+def set_clan_members(count: int, event: str = "—") -> None:
+    settings = get_settings()
+    settings["clan_members"] = int(count)
+    settings["last_event"] = event or f"Обновлено: {now_str()}"
+    save_settings(settings)
+
+
+def get_roles() -> Dict[str, Any]:
+    roles = read_json("roles.json", {"admins": {}, "owners": []})
+    if not isinstance(roles, dict):
+        roles = {"admins": {}, "owners": []}
+    roles.setdefault("admins", {})
+    roles.setdefault("owners", [])
+    return roles
+
+
+def save_roles(roles: Dict[str, Any]) -> None:
+    write_json("roles.json", roles)
+
+
+def is_owner(user_id: int) -> bool:
+    roles = get_roles()
+    return int(user_id) in ADMIN_IDS or int(user_id) in {int(x) for x in roles.get("owners", []) if str(x).lstrip("-").isdigit()}
+
+
+def grant_admin(user_id: int, by_admin: Optional[int] = None, username: Optional[str] = None) -> None:
+    roles = get_roles()
+    admins = roles.setdefault("admins", {})
+    admins[str(int(user_id))] = {"tag": ADMIN_TAG, "granted_by": by_admin, "username": username, "created_at": now_str()}
+    save_roles(roles)
+
+
+def revoke_admin(user_id: int) -> None:
+    roles = get_roles()
+    roles.setdefault("admins", {}).pop(str(int(user_id)), None)
+    save_roles(roles)
+
+
 def is_admin(user_id: int) -> bool:
-    return int(user_id) in ADMIN_IDS
+    roles = get_roles()
+    return is_owner(user_id) or str(int(user_id)) in roles.get("admins", {})
+
+
+def all_admin_ids() -> List[int]:
+    roles = get_roles()
+    ids = set(int(x) for x in ADMIN_IDS)
+    for key in roles.get("admins", {}).keys():
+        if str(key).lstrip("-").isdigit():
+            ids.add(int(key))
+    return sorted(ids)
+
+
+def remember_user(user: Dict[str, Any]) -> None:
+    if not user or user.get("is_bot"):
+        return
+    try:
+        user_id = int(user.get("id"))
+    except Exception:
+        return
+    rec = get_user(user_id)
+    rec["username"] = user.get("username")
+    rec["first_name"] = user.get("first_name")
+    rec["last_name"] = user.get("last_name")
+    rec["last_seen_at"] = now_str()
+    save_user(user_id, rec)
+
+
+def find_user_by_target(target: str) -> Optional[int]:
+    target = (target or "").strip()
+    if not target:
+        return None
+    m = re.fullmatch(r"id\s+(-?\d+)", target, flags=re.IGNORECASE)
+    if m:
+        return int(m.group(1))
+    if re.fullmatch(r"-?\d+", target):
+        return int(target)
+    if target.startswith("@"):
+        username = target[1:].lower()
+        users = read_json("users.json", {})
+        for uid, rec in users.items():
+            if isinstance(rec, dict) and str(rec.get("username") or "").lower() == username:
+                return int(uid)
+    return None
+
+
+def get_moderation() -> Dict[str, Any]:
+    data = read_json("moderation.json", {"users": {}})
+    if not isinstance(data, dict):
+        data = {"users": {}}
+    data.setdefault("users", {})
+    return data
+
+
+def save_moderation(data: Dict[str, Any]) -> None:
+    write_json("moderation.json", data)
+
+
+def set_user_moderation(user_id: int, **updates: Any) -> None:
+    data = get_moderation()
+    rec = data.setdefault("users", {}).setdefault(str(int(user_id)), {})
+    rec.update(updates)
+    rec["updated_at"] = now_str()
+    save_moderation(data)
+
+
+def clear_user_moderation(user_id: int) -> None:
+    data = get_moderation()
+    data.setdefault("users", {}).pop(str(int(user_id)), None)
+    save_moderation(data)
+
+
+def check_user_allowed(chat_id: int, user_id: int) -> bool:
+    if is_admin(user_id):
+        return True
+    rec = get_moderation().get("users", {}).get(str(int(user_id)), {})
+    if rec.get("banned"):
+        send_message(chat_id, "🚫 Вам заблокирован доступ к боту.")
+        return False
+    if rec.get("disabled"):
+        send_message(chat_id, "⛔️ Доступ к боту для вас отключён администрацией.")
+        return False
+    muted_until = float(rec.get("muted_until") or 0)
+    if muted_until > time.time():
+        send_message(chat_id, f"🔇 У вас мут. Осталось: {escape(human_wait(int(muted_until - time.time())))}.")
+        return False
+    return True
+
+
+def antiflood_ok(chat_id: int, user_id: int) -> bool:
+    if is_admin(user_id):
+        return True
+    rec = get_user(user_id)
+    last = float(rec.get("last_action_ts") or 0)
+    now = time.time()
+    if now - last < ANTIFLOOD_SECONDS:
+        wait = int(ANTIFLOOD_SECONDS - (now - last)) + 1
+        send_message(chat_id, f"⏱️ Антифлуд: подожди {wait} сек.")
+        return False
+    rec["last_action_ts"] = now
+    save_user(user_id, rec)
+    return True
+
+
+def user_name_from_rec(user_id: int) -> str:
+    rec = get_user(user_id)
+    return rec.get("first_name") or rec.get("username") or "Игрок"
+
+
+def user_rejection_count(user_id: int) -> int:
+    apps = read_json("applications.json", [])
+    return sum(1 for app in apps if int(app.get("user_id") or 0) == int(user_id) and app.get("status") == "rejected")
+
+
+def can_submit_application(user_id: int) -> Tuple[bool, str]:
+    apps = read_json("applications.json", [])
+    user_apps = [x for x in apps if int(x.get("user_id") or 0) == int(user_id)]
+    if any(x.get("status") in {"new", "reviewing"} for x in user_apps):
+        return False, "⏳ У тебя уже есть заявка на рассмотрении. Дождись решения администрации."
+    rejected = [x for x in user_apps if x.get("status") == "rejected"]
+    if len(rejected) >= 2:
+        return False, "🚫 Тебе запрещено подавать заявки в академию после повторного отказа. Обратись в техподдержку."
+    if rejected:
+        last = max(parse_time_str(x.get("updated_at") or x.get("created_at")) for x in rejected)
+        left = int(REAPPLY_COOLDOWN_SECONDS - (time.time() - last))
+        if left > 0:
+            return False, f"⏳ После отказа новую заявку можно подать через {human_wait(left)}."
+    return True, ""
 
 
 # ---------------------------------------------------------------------------
@@ -568,7 +794,7 @@ def menu_keyboard(user_id: int) -> Dict[str, Any]:
         [btn("📣 Обжалование мута", "menu:unmute")],
     ]
     if is_admin(user_id):
-        rows.append([btn("🔐 Админ панель", "admin:panel")])
+        rows.append([btn("🛡 Админ-панель", "admin:panel")])
     return kb(rows)
 
 
@@ -579,7 +805,7 @@ def cancel_keyboard() -> Dict[str, Any]:
 def back_keyboard(user_id: int) -> Dict[str, Any]:
     rows = [[btn("🏠 Главное меню", "menu:home")]]
     if is_admin(user_id):
-        rows.append([btn("🔐 Админ панель", "admin:panel")])
+        rows.append([btn("🛡 Админ-панель", "admin:panel")])
     return kb(rows)
 
 
@@ -617,37 +843,96 @@ def get_attachment(message: Dict[str, Any]) -> Tuple[Optional[str], Optional[str
 
 
 CAPTCHA = [
-    ("helmet", "🪖"),
-    ("target", "🎯"),
-    ("fire", "🔥"),
-    ("bolt", "⚡"),
-    ("shield", "🛡️"),
-    ("gem", "💎"),
+    ("yellow", "🟡"),
+    ("purple", "🟣"),
+    ("black", "⚫"),
+    ("blue", "🔵"),
+    ("red", "🔴"),
+    ("green", "🟢"),
 ]
 CAPTCHA_MAP = {key: emoji for key, emoji in CAPTCHA}
+CAPTCHA_LENGTH = 4
+
+
+def edit_message_text(
+    chat_id: int,
+    message_id: int,
+    text: str,
+    reply_markup: Optional[Dict[str, Any]] = None,
+    parse_mode: str = "HTML",
+) -> None:
+    params: Dict[str, Any] = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text,
+        "disable_web_page_preview": "true",
+    }
+    if parse_mode:
+        params["parse_mode"] = parse_mode
+    if reply_markup is not None:
+        params["reply_markup"] = dumps_markup(reply_markup)
+    try:
+        api("editMessageText", params)
+    except Exception:
+        logging.exception("Cannot edit message text")
+
+
+def captcha_progress_bar(progress: int, total: int = CAPTCHA_LENGTH) -> str:
+    progress = max(0, min(int(progress), int(total)))
+    return "🟩" * progress + "⬜" * (total - progress)
+
+
+def captcha_order_text(sequence: List[str]) -> str:
+    return " → ".join(CAPTCHA_MAP.get(key, "❔") for key in sequence)
+
+
+def captcha_text(sequence: List[str], progress: int = 0, status: str = "normal") -> str:
+    progress = max(0, min(int(progress), len(sequence) or CAPTCHA_LENGTH))
+    total = len(sequence) or CAPTCHA_LENGTH
+    status_line = "⚠️ Ошибка — будет новая капча."
+    if status == "error":
+        status_line = "❌ Ошибка — будет новая капча."
+    elif status == "success":
+        status_line = "✅ Вы успешно прошли проверку."
+
+    return (
+        "<b>🛡 Проверка: ты не бот</b>\n\n"
+        "Нажми кнопки строго в этом порядке:\n\n"
+        f"{escape(captcha_order_text(sequence))}\n\n"
+        f"Прогресс: {captcha_progress_bar(progress, total)} ({progress}/{total})\n\n"
+        f"{status_line}"
+    )
+
+
+def captcha_keyboard(button_order: Optional[List[str]] = None) -> Dict[str, Any]:
+    if not button_order:
+        buttons = CAPTCHA[:]
+        random.shuffle(buttons)
+        button_order = [key for key, _ in buttons]
+
+    rows: List[List[Dict[str, str]]] = []
+    for i in range(0, len(button_order), 3):
+        rows.append([btn(CAPTCHA_MAP.get(key, "❔"), f"cap:{key}") for key in button_order[i : i + 3]])
+    return kb(rows)
 
 
 def send_captcha(chat_id: int, user_id: int) -> None:
-    sequence = [key for key, _ in random.sample(CAPTCHA, 4)]
-    rec = get_user(user_id)
-    rec["captcha_ok"] = False
-    rec["captcha"] = {"sequence": sequence, "progress": 0, "created_at": time.time()}
-    save_user(user_id, rec)
-
+    sequence = [key for key, _ in random.sample(CAPTCHA, CAPTCHA_LENGTH)]
     buttons = CAPTCHA[:]
     random.shuffle(buttons)
-    rows: List[List[Dict[str, str]]] = []
-    for i in range(0, len(buttons), 3):
-        rows.append([btn(emoji, f"cap:{key}") for key, emoji in buttons[i : i + 3]])
+    button_order = [key for key, _ in buttons]
 
-    order = "  ".join(CAPTCHA_MAP[key] for key in sequence)
-    text = (
-        f"<b>🛡️ Антибот-проверка {escape(CLAN_NAME)}</b>\n\n"
-        "Нажми кнопки <b>строго в таком порядке</b>:\n\n"
-        f"<code>{escape(order)}</code>\n\n"
-        "Если ошибёшься — бот выдаст новую комбинацию."
-    )
-    send_message(chat_id, text, reply_markup=kb(rows))
+    rec = get_user(user_id)
+    rec["captcha_ok"] = False
+    rec["captcha"] = {
+        "sequence": sequence,
+        "progress": 0,
+        "buttons": button_order,
+        "created_at": time.time(),
+    }
+    save_user(user_id, rec)
+
+    send_message(chat_id, captcha_text(sequence, 0), reply_markup=captcha_keyboard(button_order))
 
 
 def handle_captcha_callback(cq: Dict[str, Any]) -> None:
@@ -658,6 +943,7 @@ def handle_captcha_callback(cq: Dict[str, Any]) -> None:
     user_id = int(user.get("id"))
     message = cq.get("message", {})
     chat_id = int(message.get("chat", {}).get("id", user_id))
+    message_id = int(message.get("message_id", 0) or 0)
 
     rec = get_user(user_id)
     if rec.get("captcha_ok"):
@@ -667,6 +953,7 @@ def handle_captcha_callback(cq: Dict[str, Any]) -> None:
     captcha = rec.get("captcha") or {}
     sequence = captcha.get("sequence") or []
     progress = int(captcha.get("progress") or 0)
+    button_order = captcha.get("buttons") or [key for key, _ in CAPTCHA]
 
     if not sequence or progress >= len(sequence):
         answer_callback(callback_id, "Капча устарела. Новая проверка.", True)
@@ -679,16 +966,26 @@ def handle_captcha_callback(cq: Dict[str, Any]) -> None:
         if progress >= len(sequence):
             set_verified(user_id, True)
             clear_state(user_id)
-            answer_callback(callback_id, "✅ Доступ открыт")
+            answer_callback(callback_id, "✅ Проверка пройдена")
+            if message_id:
+                edit_message_text(chat_id, message_id, captcha_text(sequence, progress, "success"), reply_markup=kb([]))
+            else:
+                send_message(chat_id, captcha_text(sequence, progress, "success"))
             send_main_menu(chat_id, user_id)
         else:
             rec["captcha"]["progress"] = progress
             save_user(user_id, rec)
-            answer_callback(callback_id, f"Верно: {progress}/{len(sequence)}")
+            answer_callback(callback_id, f"✅ Верно: {progress}/{len(sequence)}")
+            if message_id:
+                edit_message_text(chat_id, message_id, captcha_text(sequence, progress), reply_markup=captcha_keyboard(button_order))
     else:
         rec["captcha"] = {"sequence": [], "progress": 0, "created_at": time.time()}
         save_user(user_id, rec)
-        answer_callback(callback_id, "❌ Ошибка. Выдана новая капча.", True)
+        answer_callback(callback_id, "❌ Ошибка — будет новая капча.", True)
+        if message_id:
+            edit_message_text(chat_id, message_id, captcha_text(sequence, progress, "error"), reply_markup=kb([]))
+        else:
+            send_message(chat_id, "❌ Ошибка — будет новая капча.")
         send_captcha(chat_id, user_id)
 
 
@@ -698,39 +995,63 @@ def ensure_access(chat_id: int, user_id: int) -> bool:
     send_captcha(chat_id, user_id)
     return False
 
-
 # ---------------------------------------------------------------------------
 # MENU SECTIONS
 # ---------------------------------------------------------------------------
 
 
 def send_main_menu(chat_id: int, user_id: int) -> None:
+    name = user_name_from_rec(user_id)
     text = (
-        f"<b>⚔️ {escape(CLAN_NAME)}</b>\n"
-        "PUBG Mobile clan bot\n\n"
-        "Выбери нужный раздел:\n"
-        "• информация о клане\n"
-        "• заявка в состав\n"
-        "• академия\n"
-        "• техподдержка\n"
-        "• обжалование мута\n\n"
-        "Команды: /menu, /id, /cancel"
+        f"👋 <b>{escape(name)}</b>, с возвращением!\n\n"
+        "🏷 <b>Академия ZRG_Oblivion</b>\n"
+        "Бот для <b>подачи заявок в клан</b>.\n"
+        "Также есть <b>техподдержка</b> и <b>обжалование мута</b>.\n\n"
+        "━━━━━━━━━━━━━━━━\n"
+        "📌 <b>ВАЖНАЯ ИНФОРМАЦИЯ</b>\n"
+        "━━━━━━━━━━━━━━━━\n\n"
+        "📝 <b>Заявка в клан</b>\n"
+        "Заполняешь анкету — её смотрит руководство\n\n"
+        "🛠 <b>Техподдержка</b>\n"
+        "Вопросы по клану и боту\n\n"
+        "🔇 <b>Обжалование мута</b>\n"
+        "Если считаешь мут несправедливым\n\n"
+        "🏟 Клан: <b>ZRG_Oblivion</b>\n\n"
+        "Жми кнопки <b>внизу экрана</b> 👇"
     )
     send_local_photo(chat_id, "about.jpg", text, reply_markup=menu_keyboard(user_id))
 
 
 def send_about(chat_id: int, user_id: int) -> None:
+    settings = get_settings()
+    members = get_clan_members()
+    last_event = str(settings.get("last_event") or "—")
     text = (
-        f"<b>🛡️ О клане {escape(CLAN_NAME)}</b>\n\n"
-        "ZRG Oblivion — игровое сообщество PUBG Mobile с упором на командную игру, дисциплину и развитие состава.\n\n"
-        "<b>Что ценим:</b>\n"
-        "• активность и адекватность\n"
-        "• уважение к тиммейтам\n"
-        "• желание играть и расти\n"
-        "• соблюдение правил клана и чата\n\n"
-        "Хочешь к нам? Нажми «Заявка в клан»."
+        "🏷 <b>О клане ZRG_Oblivion</b>\n\n"
+        f"🏟 Тег: <b>{escape(CLAN_TAG)}</b>\n"
+        f"👥 Участников сейчас: <b>{members}</b>\n"
+        f"🕒 Последнее событие: {escape(last_event)}\n\n"
+        "━━━━━━━━━━━━━━━━\n"
+        "🎮 <b>Во что играем</b>\n"
+        "━━━━━━━━━━━━━━━━\n\n"
+        "• PUBG Mobile — основной режим\n"
+        "• Ranked / классика\n"
+        "• Метро (Metro Royale)\n"
+        "• TDM и кастомки\n"
+        "• Сквады, дуо, совместные замесы\n\n"
+        "━━━━━━━━━━━━━━━━\n"
+        "🔥 <b>Что есть в клане</b>\n"
+        "━━━━━━━━━━━━━━━━\n\n"
+        "• Активный состав и общий чат\n"
+        "• Игры вместе и набор в отряд\n"
+        "• Помощь новичкам\n"
+        "• Свои правила и модерация\n"
+        "• Заявки через бота\n"
+        "• Техподдержка\n"
+        "• Обжалование мутов\n\n"
+        "Хочешь к нам — жми «📝 Подать заявку в клан»"
     )
-    send_local_photo(chat_id, "about.jpg", text, reply_markup=kb([[btn("📝 Заявка в клан", "menu:apply")], [btn("🏠 Меню", "menu:home")]]))
+    send_local_photo(chat_id, "about.jpg", text, reply_markup=kb([[btn("📝 Подать заявку в клан", "menu:apply")], [btn("🏠 Меню", "menu:home")]]))
 
 
 def send_academy(chat_id: int, user_id: int) -> None:
@@ -765,41 +1086,80 @@ def send_admin_denied(chat_id: int, user_id: int) -> None:
 
 
 APPLICATION_FIELDS = [
-    ("nickname", "Никнейм (IGN)", "Напиши игровой никнейм (IGN):"),
-    ("game_id", "ID в игре", "Напиши числовой ID в PUBG Mobile:"),
-    ("level", "Уровень (LVL)", "Напиши уровень аккаунта (LVL):"),
-    ("kd", "K/D ratio", "Напиши K/D ratio, например: 2.15"),
-    ("role", "Роль (Role)", "Выбери роль кнопкой или напиши свою:"),
+    (
+        "nickname",
+        "Ник в PUBG",
+        "📝 <b>Заявка в клан</b>\n\n"
+        "<b>Шаг 1/5</b>\n"
+        "Напиши свой <b>ник в PUBG</b>:\n\n"
+        "Отмена — /cancel",
+    ),
+    (
+        "age",
+        "Возраст",
+        "📝 <b>Шаг 2/5</b>\n"
+        "Сколько тебе <b>лет</b>?\n"
+        "⚠️ В клан только с <b>16+</b>",
+    ),
+    (
+        "experience",
+        "Часы / опыт PUBG Mobile",
+        "📝 <b>Шаг 3/5</b>\n"
+        "Сколько примерно <b>часов / опыт</b> в PUBG Mobile?",
+    ),
+    (
+        "mode",
+        "Режим",
+        "📝 <b>Шаг 4/5</b>\n"
+        "Режим?\n"
+        "• Ranked\n"
+        "• Метро\n"
+        "• TDM\n"
+        "• соло/дуо/сквад+",
+    ),
+    (
+        "motivation",
+        "Почему хотите к нам",
+        "📝 <b>Шаг 5/5</b>\n"
+        "Расскажи, почему хочешь попасть именно к нам в клан.\n\n"
+        "Можно написать до <b>100 слов</b>. Если ответ будет слишком короткий, бот попросит описать подробнее.\n\n"
+        "Отмена — /cancel",
+    ),
 ]
 FIELD_INDEX = {key: i for i, (key, _, _) in enumerate(APPLICATION_FIELDS)}
-ROLE_OPTIONS = {
-    "assault": "Штурмовик",
-    "sniper": "Снайпер",
-    "support": "Поддержка",
-    "universal": "Универсал",
+GAME_MODE_OPTIONS = {
+    "ranked": "Ranked",
+    "metro": "Метро",
+    "tdm": "TDM",
+    "squad_plus": "Соло/дуо/сквад+",
 }
 
 
 def role_keyboard() -> Dict[str, Any]:
     return kb(
         [
-            [btn("⚔️ Штурмовик", "role:assault"), btn("🎯 Снайпер", "role:sniper")],
-            [btn("🛡️ Поддержка", "role:support"), btn("🔄 Универсал", "role:universal")],
+            [btn("🏆 Ranked", "role:ranked"), btn("🚇 Метро", "role:metro")],
+            [btn("⚔️ TDM", "role:tdm"), btn("👥 Соло/дуо/сквад+", "role:squad_plus")],
             [btn("❌ Отмена", "form:cancel")],
         ]
     )
 
 
+def application_prompt(step: str) -> str:
+    for key, _, prompt in APPLICATION_FIELDS:
+        if key == step:
+            return prompt
+    return "Ответь на вопрос анкеты:"
+
+
 def start_application(chat_id: int, user_id: int) -> None:
+    allowed, reason = can_submit_application(user_id)
+    if not allowed:
+        send_message(chat_id, reason, reply_markup=back_keyboard(user_id))
+        return
     state = {"flow": "application", "step": "nickname", "answers": {}, "created_at": now_str()}
     set_state(user_id, state)
-    text = (
-        "<b>📝 Заявка в клан</b>\n\n"
-        "Ответь на несколько вопросов. После заполнения бот покажет анкету для подтверждения.\n\n"
-        "1/5 — <b>Никнейм (IGN)</b>\n"
-        "Напиши игровой никнейм:"
-    )
-    send_local_photo(chat_id, "apply.jpg", text, reply_markup=cancel_keyboard())
+    send_local_photo(chat_id, "apply.jpg", application_prompt("nickname"), reply_markup=cancel_keyboard())
 
 
 def validate_application_field(key: str, value: str) -> Tuple[bool, str, str]:
@@ -808,30 +1168,33 @@ def validate_application_field(key: str, value: str) -> Tuple[bool, str, str]:
         if not (2 <= len(value) <= 32):
             return False, value, "Ник должен быть от 2 до 32 символов. Попробуй ещё раз:"
         return True, value, ""
-    if key == "game_id":
-        cleaned = value.replace(" ", "")
-        if not cleaned.isdigit() or not (5 <= len(cleaned) <= 15):
-            return False, value, "ID должен быть числом, обычно 5–15 цифр. Напиши ID ещё раз:"
-        return True, cleaned, ""
-    if key == "level":
-        if not value.isdigit():
-            return False, value, "Уровень должен быть числом. Напиши LVL ещё раз:"
-        lvl = int(value)
-        if not (1 <= lvl <= 150):
-            return False, value, "Уровень выглядит странно. Напиши число от 1 до 150:"
-        return True, str(lvl), ""
-    if key == "kd":
-        normalized = value.replace(",", ".")
-        try:
-            kd = float(normalized)
-        except ValueError:
-            return False, value, "K/D должен быть числом, например 2.15. Попробуй ещё раз:"
-        if not (0 <= kd <= 100):
-            return False, value, "K/D выглядит странно. Напиши корректное число:"
-        return True, f"{kd:.2f}".rstrip("0").rstrip("."), ""
-    if key == "role":
-        if not value or len(value) > 40:
-            return False, value, "Роль должна быть коротким текстом. Напиши роль ещё раз:"
+    if key == "age":
+        match = re.search(r"\d+", value)
+        if not match:
+            return False, value, "Напиши возраст числом, например: 16"
+        age = int(match.group(0))
+        if age < 16:
+            return False, value, "❌ В клан строго с 16+. Если тебе уже есть 16 — напиши возраст правильно."
+        if age > 80:
+            return False, value, "Напиши реальный возраст числом."
+        return True, str(age), ""
+    if key == "experience":
+        words = re.findall(r"\S+", value)
+        if not words:
+            return False, value, "Напиши примерно часы или опыт в PUBG Mobile. Например: 1200 часов / играю 2 года."
+        if len(value) > 200:
+            return False, value, "Ответ слишком длинный. Коротко напиши часы или опыт в PUBG Mobile:"
+        return True, value, ""
+    if key == "mode":
+        if not value or len(value) > 80:
+            return False, value, "Напиши коротко режим: Ranked, Метро, TDM или соло/дуо/сквад+."
+        return True, value, ""
+    if key == "motivation":
+        words = re.findall(r"\S+", value)
+        if len(words) <= 15:
+            return False, value, "Опишите подробнее, почему вы хотите попасть к нам в клан. Нужно больше 15 слов."
+        if len(words) > 100:
+            return False, value, f"Слишком длинно: {len(words)} слов. Максимум 100 слов. Сократи текст и отправь ещё раз:"
         return True, value, ""
     return True, value, ""
 
@@ -845,13 +1208,10 @@ def application_summary(answers: Dict[str, Any], title: str = "Анкета") ->
 
 def ask_next_application_step(chat_id: int, user_id: int, state: Dict[str, Any]) -> None:
     step = state.get("step")
-    idx = FIELD_INDEX[step]
-    _, label, prompt = APPLICATION_FIELDS[idx]
-    prefix = f"{idx + 1}/5 — <b>{escape(label)}</b>\n"
-    if step == "role":
-        send_message(chat_id, prefix + escape(prompt), reply_markup=role_keyboard())
+    if step == "mode":
+        send_message(chat_id, application_prompt(step), reply_markup=role_keyboard())
     else:
-        send_message(chat_id, prefix + escape(prompt), reply_markup=cancel_keyboard())
+        send_message(chat_id, application_prompt(step), reply_markup=cancel_keyboard())
 
 
 def process_application_message(message: Dict[str, Any], state: Dict[str, Any]) -> None:
@@ -898,19 +1258,19 @@ def process_role_callback(cq: Dict[str, Any]) -> None:
     callback_id = cq.get("id", "")
     data = cq.get("data", "")
     role_key = data.split(":", 1)[1] if ":" in data else ""
-    role = ROLE_OPTIONS.get(role_key)
+    role = GAME_MODE_OPTIONS.get(role_key)
     user = cq.get("from", {})
     user_id = int(user.get("id"))
     chat_id = int(cq.get("message", {}).get("chat", {}).get("id", user_id))
 
     state = get_state(user_id)
-    if not state or state.get("flow") != "application" or state.get("step") != "role" or not role:
+    if not state or state.get("flow") != "application" or state.get("step") != "mode" or not role:
         answer_callback(callback_id, "Эта кнопка уже неактивна.")
         return
-    state.setdefault("answers", {})["role"] = role
+    state.setdefault("answers", {})["mode"] = role
     state["step"] = "confirm"
     set_state(user_id, state)
-    answer_callback(callback_id, "Роль выбрана")
+    answer_callback(callback_id, "Режим выбран")
     send_message(chat_id, application_summary(state["answers"], "Проверь заявку"), reply_markup=confirm_application_keyboard())
 
 
@@ -1065,10 +1425,85 @@ def process_unmute_message(message: Dict[str, Any], state: Dict[str, Any]) -> No
 
 STATUS_LABELS = {
     "new": "🟡 новая",
+    "reviewing": "👀 рассматривается",
     "approved": "✅ принято",
+    "auto_approved": "🤖 авто-принято",
     "rejected": "❌ отклонено",
+    "answered": "💬 отвечено",
     "closed": "✅ закрыто",
 }
+
+
+def accept_text(auto: bool = False) -> str:
+    prefix = "🤖 Автоответчик" if auto else "✅ Руководство"
+    return (
+        f"{prefix}: вы успешно приняты в клан ZRG_Oblivion!\n\n"
+        f"Ссылка для вступления: {ACCEPT_INVITE_LINK}"
+    )
+
+
+def rewrite_notice_text() -> str:
+    return (
+        "♻️ <b>Бот переписан</b>\n\n"
+        "• Меню и раздел «О клане» обновлены под ZRG_Oblivion\n"
+        "• Количество участников меняется командой <code>/members 59</code> в группе или личке\n"
+        "• Админ-панель скрыта от обычных игроков\n"
+        f"• Доступ админа выдаётся тегом <code>{escape(ADMIN_TAG)}</code> через панель\n"
+        "• Бан / мут 1ч / отключение доступа / снятие ограничений\n"
+        f"• Антифлуд {ANTIFLOOD_SECONDS} сек\n"
+        "• Заявки можно принять, отклонить, взять в рассмотрение или ответить человеку\n"
+        "• Если заявку не разобрали 3 часа — бот авто-примет и отправит ссылку\n"
+        "• После отказа новая заявка доступна через 2 часа; после второго отказа заявки закрываются\n"
+        "• Техподдержке можно отвечать прямо из бота\n"
+        "• Локальные папки и базы создаются автоматически\n\n"
+        "Нажми /start — увидишь «🛡 Админ-панель»."
+    )
+
+
+def admin_panel_text() -> str:
+    apps = read_json("applications.json", [])
+    tickets = read_json("tickets.json", [])
+    appeals = read_json("appeals.json", [])
+
+    def count(items: Iterable[Dict[str, Any]], statuses: set[str]) -> int:
+        return sum(1 for x in items if x.get("status") in statuses)
+
+    admins = all_admin_ids()
+    return (
+        f"🛡 <b>Админ-панель</b>\n"
+        f"Тег доступа: <code>{escape(ADMIN_TAG)}</code>\n\n"
+        "Доступна <b>только</b> админам.\n\n"
+        f"📥 <b>Список заявок</b>: {count(apps, {'new', 'reviewing'})} активных / {len(apps)} всего\n"
+        "у каждой: принять+ссылка / отказать / ответить / бан / мут\n\n"
+        "• 🚫 Бан — полный блок бота\n"
+        "• 🔇 Мут 1ч — нельзя писать боту 1 час\n"
+        "• ⛔️ Отключить доступ\n"
+        "• ✅ Разбан / снять\n"
+        "• 👑 Выдать / снять admin\n\n"
+        "⏱️ <b>Авто-принятие:</b> если заявку не разобрать за 3 ч,\n"
+        "бот сам напишет: «Вы успешно приняты… вот ссылка»\n"
+        f"Ссылка: {ACCEPT_INVITE_LINK}\n\n"
+        "Формат цели (бан/мут/admin):\n"
+        "<code>id 123456789</code> или <code>@username</code>\n\n"
+        f"Антифлуд: <b>{ANTIFLOOD_SECONDS} сек</b>.\n\n"
+        f"🎧 Техподдержка: {count(tickets, {'new', 'reviewing', 'answered'})} активных / {len(tickets)} всего\n"
+        f"📣 Муты: {count(appeals, {'new', 'reviewing'})} активных / {len(appeals)} всего\n"
+        f"👑 Админы: {', '.join(str(x) for x in admins) or 'не настроены'}"
+    )
+
+
+def admin_panel_keyboard() -> Dict[str, Any]:
+    return kb(
+        [
+            [btn("📥 Список заявок", "admin:list:applications"), btn("🎧 Техподдержка", "admin:list:tickets")],
+            [btn("📣 Обжалования", "admin:list:appeals"), btn("♻️ Что обновлено", "admin:rewrite")],
+            [btn("🚫 Бан", "admin:prompt:ban"), btn("🔇 Мут 1ч", "admin:prompt:mute")],
+            [btn("⛔️ Отключить доступ", "admin:prompt:disable"), btn("✅ Разбан / снять", "admin:prompt:unban")],
+            [btn("👑 Выдать admin", "admin:prompt:grant_admin"), btn("➖ Снять admin", "admin:prompt:revoke_admin")],
+            [btn("👥 Участников клана", "admin:prompt:set_members"), btn("📦 Экспорт JSON", "admin:export")],
+            [btn("🔄 Обновить", "admin:panel"), btn("🏠 Главное меню", "menu:home")],
+        ]
+    )
 
 
 def admin_action_keyboard(kind: str, item: Dict[str, Any]) -> Dict[str, Any]:
@@ -1076,15 +1511,26 @@ def admin_action_keyboard(kind: str, item: Dict[str, Any]) -> Dict[str, Any]:
     user_id = int(item.get("user_id") or 0)
     rows: List[List[Dict[str, str]]] = []
     if kind == "application":
-        rows.append([btn("✅ Принять", f"admin:application:approve:{item_id}"), btn("❌ Отклонить", f"admin:application:reject:{item_id}")])
+        rows.append([btn("👀 Взять", f"admin:application:take:{item_id}"), btn("✅ Принять", f"admin:application:approve:{item_id}"), btn("❌ Отклонить", f"admin:application:reject:{item_id}")])
+        rows.append([btn("💬 Ответить", f"admin:application:reply:{item_id}")])
     elif kind == "ticket":
-        rows.append([btn("✅ Закрыть", f"admin:ticket:close:{item_id}")])
+        rows.append([btn("👀 Взять", f"admin:ticket:take:{item_id}"), btn("💬 Ответить", f"admin:ticket:reply:{item_id}"), btn("✅ Закрыть", f"admin:ticket:close:{item_id}")])
     elif kind == "appeal":
-        rows.append([btn("✅ Одобрить", f"admin:appeal:approve:{item_id}"), btn("❌ Отклонить", f"admin:appeal:reject:{item_id}")])
+        rows.append([btn("👀 Взять", f"admin:appeal:take:{item_id}"), btn("✅ Одобрить", f"admin:appeal:approve:{item_id}"), btn("❌ Отклонить", f"admin:appeal:reject:{item_id}")])
+        rows.append([btn("💬 Ответить", f"admin:appeal:reply:{item_id}")])
     if user_id:
-        rows.append([btn("👤 Написать пользователю", url=f"tg://user?id={user_id}")])
-    rows.append([btn("🔐 Админ панель", "admin:panel")])
+        rows.append([btn("🚫 Бан", f"admin:{kind}:ban:{item_id}"), btn("🔇 Мут 1ч", f"admin:{kind}:mute:{item_id}"), btn("⛔️ Отключить", f"admin:{kind}:disable:{item_id}")])
+        rows.append([btn("✅ Разбан / снять", f"admin:{kind}:unban:{item_id}"), btn("👤 Профиль", url=f"tg://user?id={user_id}")])
+    rows.append([btn("🛡 Админ-панель", "admin:panel")])
     return kb(rows)
+
+
+def application_visible(item: Dict[str, Any]) -> bool:
+    status = item.get("status")
+    if status in {"new", "reviewing"}:
+        return True
+    ts = parse_time_str(item.get("updated_at") or item.get("created_at"))
+    return not ts or (time.time() - ts) <= KEEP_PROCESSED_SECONDS
 
 
 def format_application_item(item: Dict[str, Any]) -> str:
@@ -1092,11 +1538,15 @@ def format_application_item(item: Dict[str, Any]) -> str:
     user_id = int(item.get("user_id") or 0)
     status = STATUS_LABELS.get(item.get("status", "new"), item.get("status", "new"))
     text = [
-        f"<b>📝 Заявка #{item.get('id')}</b>",
+        f"<b>📝 Заявка в академию #{item.get('id')}</b>",
         f"<b>Статус:</b> {escape(status)}",
         f"<b>Дата:</b> {escape(str(item.get('created_at', '—')))}",
         f"<b>Пользователь:</b> {user_link(user_id, item.get('full_name') or str(user_id))}",
     ]
+    if item.get("reviewer_id"):
+        text.append(f"<b>Рассматривает:</b> {user_link(int(item.get('reviewer_id')), item.get('reviewer_name') or str(item.get('reviewer_id')))}")
+    if item.get("admin_id"):
+        text.append(f"<b>Решение:</b> {user_link(int(item.get('admin_id')), item.get('admin_username') or str(item.get('admin_id')))}")
     if item.get("username"):
         text.append(f"<b>Username:</b> @{escape(str(item.get('username')))}")
     text.append("")
@@ -1113,9 +1563,15 @@ def format_ticket_item(item: Dict[str, Any]) -> str:
         f"<b>Дата:</b> {escape(str(item.get('created_at', '—')))}",
         f"<b>Пользователь:</b> {user_link(user_id, item.get('full_name') or str(user_id))}",
     ]
+    if item.get("reviewer_id"):
+        text.append(f"<b>Рассматривает:</b> {user_link(int(item.get('reviewer_id')), item.get('reviewer_name') or str(item.get('reviewer_id')))}")
     if item.get("username"):
         text.append(f"<b>Username:</b> @{escape(str(item.get('username')))}")
     text.extend(["", f"<b>Сообщение:</b>\n{escape(str(item.get('text', '—')))}"])
+    if item.get("replies"):
+        text.append("\n<b>Ответы:</b>")
+        for reply in item.get("replies", [])[-3:]:
+            text.append(f"• {escape(str(reply.get('created_at', '')))}: {escape(str(reply.get('text', '')))}")
     return "\n".join(text)
 
 
@@ -1130,19 +1586,26 @@ def format_appeal_item(item: Dict[str, Any]) -> str:
         f"<b>Дата:</b> {escape(str(item.get('created_at', '—')))}",
         f"<b>Пользователь:</b> {user_link(user_id, item.get('full_name') or str(user_id))}",
     ]
+    if item.get("reviewer_id"):
+        text.append(f"<b>Рассматривает:</b> {user_link(int(item.get('reviewer_id')), item.get('reviewer_name') or str(item.get('reviewer_id')))}")
     if item.get("username"):
         text.append(f"<b>Username:</b> @{escape(str(item.get('username')))}")
     text.append("")
     for key, label in labels.items():
         text.append(f"<b>{escape(label)}:</b> {escape(str(answers.get(key, '—')))}")
+    if item.get("replies"):
+        text.append("\n<b>Ответы:</b>")
+        for reply in item.get("replies", [])[-3:]:
+            text.append(f"• {escape(str(reply.get('created_at', '')))}: {escape(str(reply.get('text', '')))}")
     return "\n".join(text)
 
 
 def notify_admins(text: str, keyboard: Optional[Dict[str, Any]] = None, attachment_type: Optional[str] = None, file_id: Optional[str] = None) -> None:
-    if not ADMIN_IDS:
-        logging.warning("ADMIN_IDS is empty; admin notification was not sent")
+    admins = all_admin_ids()
+    if not admins:
+        logging.warning("No admins configured; admin notification was not sent")
         return
-    for admin_id in ADMIN_IDS:
+    for admin_id in admins:
         try:
             if attachment_type == "photo" and file_id:
                 if len(text) <= 1000:
@@ -1171,54 +1634,17 @@ def notify_admins_appeal(item: Dict[str, Any]) -> None:
     notify_admins(format_appeal_item(item), keyboard=admin_action_keyboard("appeal", item), attachment_type=item.get("attachment_type"), file_id=item.get("file_id"))
 
 
-def stats_text() -> str:
-    apps = read_json("applications.json", [])
-    tickets = read_json("tickets.json", [])
-    appeals = read_json("appeals.json", [])
-
-    def count_new(items: Iterable[Dict[str, Any]]) -> int:
-        return sum(1 for x in items if x.get("status") == "new")
-
-    return (
-        "<b>🔐 Админ панель</b>\n\n"
-        f"<b>Заявки в клан:</b> {count_new(apps)} новых / {len(apps)} всего\n"
-        f"<b>Техподдержка:</b> {count_new(tickets)} новых / {len(tickets)} всего\n"
-        f"<b>Обжалования мута:</b> {count_new(appeals)} новых / {len(appeals)} всего\n\n"
-        f"<b>Админы:</b> {', '.join(str(x) for x in sorted(ADMIN_IDS)) or 'не настроены'}\n"
-        f"<b>DATA_DIR:</b> <code>{escape(str(DATA_DIR))}</code>"
-    )
-
-
-def admin_panel_keyboard() -> Dict[str, Any]:
-    apps = read_json("applications.json", [])
-    tickets = read_json("tickets.json", [])
-    appeals = read_json("appeals.json", [])
-
-    def new_count(items: Iterable[Dict[str, Any]]) -> int:
-        return sum(1 for x in items if x.get("status") == "new")
-
-    return kb(
-        [
-            [btn(f"📝 Заявки ({new_count(apps)})", "admin:list:applications")],
-            [btn(f"🎧 Тикеты ({new_count(tickets)})", "admin:list:tickets")],
-            [btn(f"📣 Муты ({new_count(appeals)})", "admin:list:appeals")],
-            [btn("📦 Экспорт JSON", "admin:export"), btn("🔄 Обновить", "admin:panel")],
-            [btn("🏠 Главное меню", "menu:home")],
-        ]
-    )
-
-
 def send_admin_panel(chat_id: int, user_id: int) -> None:
     if not is_admin(user_id):
         send_admin_denied(chat_id, user_id)
         return
-    send_local_photo(chat_id, "admin.jpg", stats_text(), reply_markup=admin_panel_keyboard())
+    send_local_photo(chat_id, "admin.jpg", admin_panel_text(), reply_markup=admin_panel_keyboard())
 
 
 def admin_send_list(chat_id: int, kind: str) -> None:
     mapping = {
-        "applications": ("applications.json", "application", "📝 Заявки"),
-        "tickets": ("tickets.json", "ticket", "🎧 Тикеты"),
+        "applications": ("applications.json", "application", "📥 Заявки в академию"),
+        "tickets": ("tickets.json", "ticket", "🎧 Техподдержка"),
         "appeals": ("appeals.json", "appeal", "📣 Обжалования мута"),
     }
     if kind not in mapping:
@@ -1226,15 +1652,18 @@ def admin_send_list(chat_id: int, kind: str) -> None:
         return
     filename, item_kind, title = mapping[kind]
     items = read_json(filename, [])
+    if item_kind == "application":
+        items = [x for x in items if application_visible(x)]
     if not items:
         send_message(chat_id, f"<b>{title}</b>\nСписок пуст.", reply_markup=admin_panel_keyboard())
         return
 
     def sort_key(x: Dict[str, Any]) -> Tuple[int, int]:
-        return (0 if x.get("status") == "new" else 1, -int(x.get("id") or 0))
+        status_order = {"new": 0, "reviewing": 1, "answered": 2, "approved": 3, "auto_approved": 3, "rejected": 4, "closed": 5}
+        return (status_order.get(str(x.get("status")), 9), -int(x.get("id") or 0))
 
-    shown = sorted(items, key=sort_key)[:10]
-    send_message(chat_id, f"<b>{title}</b>\nПоказываю до 10 актуальных записей.", reply_markup=admin_panel_keyboard())
+    shown = sorted(items, key=sort_key)[:20]
+    send_message(chat_id, f"<b>{title}</b>\nПоказываю до 20 записей. Принятые/отклонённые видны 3 дня.", reply_markup=admin_panel_keyboard())
     for item in shown:
         if item_kind == "application":
             text = format_application_item(item)
@@ -1242,7 +1671,7 @@ def admin_send_list(chat_id: int, kind: str) -> None:
             text = format_ticket_item(item)
         else:
             text = format_appeal_item(item)
-        keyboard = admin_action_keyboard(item_kind, item) if item.get("status") == "new" else admin_panel_keyboard()
+        keyboard = admin_action_keyboard(item_kind, item)
         att_type = item.get("attachment_type")
         file_id = item.get("file_id")
         if att_type == "photo" and file_id:
@@ -1254,6 +1683,132 @@ def admin_send_list(chat_id: int, kind: str) -> None:
             send_message(chat_id, text, reply_markup=keyboard)
 
 
+def filename_for_kind(kind: str) -> Optional[str]:
+    return {"application": "applications.json", "ticket": "tickets.json", "appeal": "appeals.json"}.get(kind)
+
+
+def get_item(filename: str, item_id: int) -> Optional[Dict[str, Any]]:
+    items = read_json(filename, [])
+    for item in items:
+        if int(item.get("id", -1)) == int(item_id):
+            return item
+    return None
+
+
+def prompt_target(chat_id: int, admin_id: int, action: str) -> None:
+    titles = {
+        "ban": "🚫 Бан",
+        "mute": "🔇 Мут 1ч",
+        "disable": "⛔️ Отключить доступ",
+        "unban": "✅ Разбан / снять",
+        "grant_admin": "👑 Выдать admin",
+        "revoke_admin": "➖ Снять admin",
+        "set_members": "👥 Участников клана",
+    }
+    set_state(admin_id, {"flow": "admin_target", "action": action, "created_at": now_str()})
+    if action == "set_members":
+        send_message(chat_id, "Напиши новое число участников, например: <code>59</code>", reply_markup=cancel_keyboard())
+    else:
+        send_message(chat_id, f"{titles.get(action, action)}\nОтправь цель в формате: <code>id 123456789</code> или <code>@username</code>", reply_markup=cancel_keyboard())
+
+
+def apply_target_action(chat_id: int, admin_id: int, action: str, target_id: int, username: Optional[str] = None) -> None:
+    if action == "ban":
+        set_user_moderation(target_id, banned=True)
+        send_message(chat_id, f"🚫 Пользователь {target_id} забанен.", reply_markup=admin_panel_keyboard())
+        try: send_message(target_id, "🚫 Вам заблокирован доступ к боту.")
+        except Exception: pass
+    elif action == "mute":
+        set_user_moderation(target_id, muted_until=time.time() + 3600)
+        send_message(chat_id, f"🔇 Пользователю {target_id} выдан мут на 1 час.", reply_markup=admin_panel_keyboard())
+        try: send_message(target_id, "🔇 Вам выдан мут на 1 час. Вы временно не можете писать боту.")
+        except Exception: pass
+    elif action == "disable":
+        set_user_moderation(target_id, disabled=True)
+        send_message(chat_id, f"⛔️ Доступ пользователю {target_id} отключён.", reply_markup=admin_panel_keyboard())
+        try: send_message(target_id, "⛔️ Доступ к боту отключён администрацией.")
+        except Exception: pass
+    elif action == "unban":
+        clear_user_moderation(target_id)
+        send_message(chat_id, f"✅ Ограничения с пользователя {target_id} сняты.", reply_markup=admin_panel_keyboard())
+        try: send_message(target_id, "✅ Ограничения сняты. Доступ к боту восстановлен.")
+        except Exception: pass
+    elif action == "grant_admin":
+        grant_admin(target_id, by_admin=admin_id, username=username)
+        send_message(chat_id, f"👑 Пользователю {target_id} выдан тег <code>{escape(ADMIN_TAG)}</code>.", reply_markup=admin_panel_keyboard())
+        try: send_message(target_id, f"👑 Вам выдан доступ к админ-панели. Тег: <code>{escape(ADMIN_TAG)}</code>.")
+        except Exception: pass
+    elif action == "revoke_admin":
+        if is_owner(target_id):
+            send_message(chat_id, "⚠️ Нельзя снять owner из переменной ADMIN_IDS.", reply_markup=admin_panel_keyboard())
+            return
+        revoke_admin(target_id)
+        send_message(chat_id, f"➖ У пользователя {target_id} снят тег admin.", reply_markup=admin_panel_keyboard())
+        try: send_message(target_id, "➖ Доступ к админ-панели снят.")
+        except Exception: pass
+
+
+def process_admin_state(message: Dict[str, Any], state: Dict[str, Any]) -> bool:
+    user = message.get("from", {})
+    admin_id = int(user.get("id"))
+    chat_id = int(message["chat"]["id"])
+    text = get_text(message)
+    if not is_admin(admin_id):
+        return False
+    flow = state.get("flow")
+    if flow == "admin_target":
+        action = state.get("action")
+        if action == "set_members":
+            if not text.isdigit():
+                send_message(chat_id, "Нужно отправить число, например: <code>59</code>.", reply_markup=cancel_keyboard())
+                return True
+            set_clan_members(int(text), f"Обновлено админом {admin_id}: {now_str()}")
+            clear_state(admin_id)
+            send_message(chat_id, f"✅ Количество участников обновлено: <b>{int(text)}</b>", reply_markup=admin_panel_keyboard())
+            return True
+        target_id = find_user_by_target(text)
+        if target_id is None:
+            send_message(chat_id, "Не нашёл пользователя. Формат: <code>id 123456789</code> или <code>@username</code>. Если @username не найден — попроси человека написать /start боту.", reply_markup=cancel_keyboard())
+            return True
+        target_rec = get_user(target_id)
+        clear_state(admin_id)
+        apply_target_action(chat_id, admin_id, str(action), target_id, username=target_rec.get("username"))
+        return True
+    if flow == "admin_reply":
+        kind = state.get("kind")
+        item_id = int(state.get("item_id") or 0)
+        filename = filename_for_kind(str(kind))
+        if not filename:
+            clear_state(admin_id)
+            return False
+        items = read_json(filename, [])
+        found = None
+        for item in items:
+            if int(item.get("id", -1)) == item_id:
+                found = item
+                break
+        if not found:
+            clear_state(admin_id)
+            send_message(chat_id, "Запись не найдена.", reply_markup=admin_panel_keyboard())
+            return True
+        reply = {"admin_id": admin_id, "admin_username": user.get("username"), "text": text, "created_at": now_str()}
+        found.setdefault("replies", []).append(reply)
+        if found.get("status") == "new":
+            found["status"] = "answered"
+        found["updated_at"] = now_str()
+        write_json(filename, items)
+        target_user = int(found.get("user_id") or 0)
+        if target_user:
+            try:
+                send_message(target_user, f"💬 <b>Ответ администрации ZRG_Oblivion:</b>\n\n{escape(text)}", reply_markup=back_keyboard(target_user))
+            except Exception as e:
+                logging.error("Cannot send admin reply to user %s: %s", target_user, e)
+        clear_state(admin_id)
+        send_message(chat_id, f"✅ Ответ отправлен пользователю по записи #{item_id}.", reply_markup=admin_panel_keyboard())
+        return True
+    return False
+
+
 def handle_admin_action(cq: Dict[str, Any]) -> None:
     callback_id = cq.get("id", "")
     user = cq.get("from", {})
@@ -1262,6 +1817,7 @@ def handle_admin_action(cq: Dict[str, Any]) -> None:
     chat_id = int(message.get("chat", {}).get("id", admin_id))
     message_id = int(message.get("message_id", 0) or 0)
     data = cq.get("data", "")
+    remember_user(user)
 
     if not is_admin(admin_id):
         answer_callback(callback_id, "Нет доступа", True)
@@ -1270,8 +1826,17 @@ def handle_admin_action(cq: Dict[str, Any]) -> None:
 
     parts = data.split(":")
     if data == "admin:panel":
-        answer_callback(callback_id, "Админ панель")
+        answer_callback(callback_id, "Админ-панель")
         send_admin_panel(chat_id, admin_id)
+        return
+    if data == "admin:rewrite":
+        answer_callback(callback_id, "Что обновлено")
+        send_message(chat_id, rewrite_notice_text(), reply_markup=admin_panel_keyboard())
+        return
+    if data.startswith("admin:prompt:"):
+        action = parts[2] if len(parts) > 2 else ""
+        answer_callback(callback_id, "Введите цель")
+        prompt_target(chat_id, admin_id, action)
         return
     if data.startswith("admin:list:"):
         kind = parts[2] if len(parts) > 2 else ""
@@ -1287,85 +1852,158 @@ def handle_admin_action(cq: Dict[str, Any]) -> None:
     if len(parts) != 4:
         answer_callback(callback_id, "Неизвестная команда", True)
         return
-
     kind, action, raw_id = parts[1], parts[2], parts[3]
+    filename = filename_for_kind(kind)
+    if not filename:
+        answer_callback(callback_id, "Неизвестный тип", True)
+        return
     try:
         item_id = int(raw_id)
     except ValueError:
         answer_callback(callback_id, "Неверный ID", True)
         return
 
-    if kind == "application":
-        filename = "applications.json"
-        if action == "approve":
-            status, user_text, admin_text = "approved", "✅ Твоя заявка в клан принята. Администратор свяжется с тобой.", "Заявка принята."
-        elif action == "reject":
-            status, user_text, admin_text = "rejected", "❌ Твоя заявка в клан отклонена. Можно попробовать позже.", "Заявка отклонена."
-        else:
-            answer_callback(callback_id, "Неизвестное действие", True)
-            return
-    elif kind == "ticket":
-        filename = "tickets.json"
-        if action == "close":
-            status, user_text, admin_text = "closed", "✅ Твоё обращение в техподдержку закрыто администратором.", "Тикет закрыт."
-        else:
-            answer_callback(callback_id, "Неизвестное действие", True)
-            return
-    elif kind == "appeal":
-        filename = "appeals.json"
-        if action == "approve":
-            status, user_text, admin_text = "approved", "✅ Обжалование мута одобрено. Ожидай восстановления доступа к чату.", "Обжалование одобрено."
-        elif action == "reject":
-            status, user_text, admin_text = "rejected", "❌ Обжалование мута отклонено. Решение администрации оставлено в силе.", "Обжалование отклонено."
-        else:
-            answer_callback(callback_id, "Неизвестное действие", True)
-            return
-    else:
-        answer_callback(callback_id, "Неизвестный тип", True)
-        return
-
-    current_items = read_json(filename, [])
-    current = next((x for x in current_items if int(x.get("id", -1)) == item_id), None)
-    if not current:
-        answer_callback(callback_id, "Запись не найдена", True)
-        return
-    if current.get("status") != "new":
-        answer_callback(callback_id, "Запись уже обработана", True)
-        return
-
-    item = update_record(
-        filename,
-        item_id,
-        {"status": status, "admin_id": admin_id, "updated_at": now_str(), "admin_username": user.get("username")},
-    )
+    items = read_json(filename, [])
+    item = next((x for x in items if int(x.get("id", -1)) == item_id), None)
     if not item:
         answer_callback(callback_id, "Запись не найдена", True)
         return
 
-    answer_callback(callback_id, admin_text)
-    if message_id:
-        edit_message_reply_markup(chat_id, message_id)
-    send_message(chat_id, f"✅ {escape(admin_text)} #{item_id}", reply_markup=admin_panel_keyboard())
+    reviewer_id = int(item.get("reviewer_id") or 0)
+    if reviewer_id and reviewer_id != admin_id and action in {"take", "approve", "reject", "reply", "close"}:
+        answer_callback(callback_id, f"Уже рассматривает админ {reviewer_id}", True)
+        send_message(chat_id, f"👀 Запись #{item_id} уже рассматривает {user_link(reviewer_id)}.")
+        return
 
-    target_user = item.get("user_id")
-    if target_user:
-        try:
-            send_message(int(target_user), f"<b>{escape(CLAN_NAME)}</b>\n{escape(user_text)}", reply_markup=back_keyboard(int(target_user)))
-        except Exception as e:
-            logging.error("Cannot notify user %s: %s", target_user, e)
+    target_user = int(item.get("user_id") or 0)
+
+    if action in {"ban", "mute", "disable", "unban"}:
+        if target_user:
+            apply_target_action(chat_id, admin_id, action, target_user, username=item.get("username"))
+            answer_callback(callback_id, "Готово")
+        return
+
+    if action == "take":
+        item["status"] = "reviewing"
+        item["reviewer_id"] = admin_id
+        item["reviewer_name"] = user.get("username") or user.get("first_name") or str(admin_id)
+        item["updated_at"] = now_str()
+        write_json(filename, items)
+        answer_callback(callback_id, "Вы взяли запись")
+        notify_admins(f"👀 Админ {user_link(admin_id, item.get('reviewer_name'))} уже рассматривает запись #{item_id}.", keyboard=admin_action_keyboard(kind, item))
+        return
+
+    if action == "reply":
+        set_state(admin_id, {"flow": "admin_reply", "kind": kind, "item_id": item_id, "created_at": now_str()})
+        answer_callback(callback_id, "Напишите ответ")
+        send_message(chat_id, f"💬 Напиши ответ пользователю по записи #{item_id}. Следующее сообщение уйдёт ему в бот.", reply_markup=cancel_keyboard())
+        return
+
+    if kind == "application":
+        if item.get("status") not in {"new", "reviewing", "answered"}:
+            answer_callback(callback_id, "Заявка уже обработана", True)
+            return
+        if action == "approve":
+            item.update({"status": "approved", "admin_id": admin_id, "admin_username": user.get("username") or str(admin_id), "updated_at": now_str()})
+            write_json(filename, items)
+            answer_callback(callback_id, "Заявка принята")
+            if message_id:
+                edit_message_reply_markup(chat_id, message_id)
+            send_message(chat_id, f"✅ Заявка #{item_id} принята. Пользователю отправлена ссылка.", reply_markup=admin_panel_keyboard())
+            if target_user:
+                try: send_message(target_user, accept_text(False), reply_markup=back_keyboard(target_user))
+                except Exception as e: logging.error("Cannot notify accepted user %s: %s", target_user, e)
+            return
+        if action == "reject":
+            previous_rejects = user_rejection_count(target_user)
+            item.update({"status": "rejected", "admin_id": admin_id, "admin_username": user.get("username") or str(admin_id), "updated_at": now_str()})
+            write_json(filename, items)
+            answer_callback(callback_id, "Заявка отклонена")
+            if message_id:
+                edit_message_reply_markup(chat_id, message_id)
+            if target_user:
+                if previous_rejects + 1 >= 2:
+                    user_text = "❌ Заявка отклонена повторно. Подача заявок в академию для вас закрыта."
+                else:
+                    user_text = "❌ Заявка отклонена. Повторно подать заявку можно через 2 часа."
+                try: send_message(target_user, user_text, reply_markup=back_keyboard(target_user))
+                except Exception as e: logging.error("Cannot notify rejected user %s: %s", target_user, e)
+            send_message(chat_id, f"❌ Заявка #{item_id} отклонена.", reply_markup=admin_panel_keyboard())
+            return
+
+    elif kind == "ticket":
+        if action == "close":
+            item.update({"status": "closed", "admin_id": admin_id, "admin_username": user.get("username") or str(admin_id), "updated_at": now_str()})
+            write_json(filename, items)
+            answer_callback(callback_id, "Тикет закрыт")
+            if message_id:
+                edit_message_reply_markup(chat_id, message_id)
+            if target_user:
+                try: send_message(target_user, "✅ Твоё обращение в техподдержку закрыто администратором.", reply_markup=back_keyboard(target_user))
+                except Exception as e: logging.error("Cannot notify ticket user %s: %s", target_user, e)
+            send_message(chat_id, f"✅ Тикет #{item_id} закрыт.", reply_markup=admin_panel_keyboard())
+            return
+
+    elif kind == "appeal":
+        if action in {"approve", "reject"}:
+            status = "approved" if action == "approve" else "rejected"
+            user_text = "✅ Обжалование мута одобрено. Ожидай восстановления доступа к чату." if action == "approve" else "❌ Обжалование мута отклонено. Решение администрации оставлено в силе."
+            item.update({"status": status, "admin_id": admin_id, "admin_username": user.get("username") or str(admin_id), "updated_at": now_str()})
+            write_json(filename, items)
+            answer_callback(callback_id, "Готово")
+            if message_id:
+                edit_message_reply_markup(chat_id, message_id)
+            if target_user:
+                try: send_message(target_user, user_text, reply_markup=back_keyboard(target_user))
+                except Exception as e: logging.error("Cannot notify appeal user %s: %s", target_user, e)
+            send_message(chat_id, f"✅ Обжалование #{item_id} обработано.", reply_markup=admin_panel_keyboard())
+            return
+
+    answer_callback(callback_id, "Неизвестное действие", True)
+
+
+def auto_accept_applications() -> None:
+    items = read_json("applications.json", [])
+    changed = False
+    for item in items:
+        if item.get("status") not in {"new", "reviewing"}:
+            continue
+        created = parse_time_str(item.get("created_at"))
+        if not created or time.time() - created < AUTO_ACCEPT_SECONDS:
+            continue
+        item["status"] = "auto_approved"
+        item["updated_at"] = now_str()
+        item["admin_id"] = 0
+        item["admin_username"] = "auto"
+        changed = True
+        target_user = int(item.get("user_id") or 0)
+        if target_user:
+            try: send_message(target_user, accept_text(True), reply_markup=back_keyboard(target_user))
+            except Exception as e: logging.error("Cannot auto-accept user %s: %s", target_user, e)
+        notify_admins(f"🤖 Заявка #{item.get('id')} авто-принята через 3 часа. Пользователю отправлена ссылка.", keyboard=admin_action_keyboard("application", item))
+    if changed:
+        write_json("applications.json", items)
+
+
+def send_rewrite_notice_once() -> None:
+    settings = get_settings()
+    if settings.get("rewrite_notice_version") == BOT_VERSION:
+        return
+    notify_admins(rewrite_notice_text(), keyboard=admin_panel_keyboard())
+    settings["rewrite_notice_version"] = BOT_VERSION
+    save_settings(settings)
 
 
 def export_data(chat_id: int) -> None:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     export_path = DATA_DIR / f"zrg_export_{ts}.zip"
-    files = ["users.json", "applications.json", "tickets.json", "appeals.json", "counters.json"]
+    files = ["users.json", "applications.json", "tickets.json", "appeals.json", "counters.json", "roles.json", "moderation.json", "settings.json"]
     with zipfile.ZipFile(export_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for name in files:
             path = json_path(name)
             if path.exists():
                 zf.write(path, arcname=name)
     send_local_document(chat_id, export_path, "📦 Экспорт данных ZRG Bot")
-
 
 # ---------------------------------------------------------------------------
 # UPDATE ROUTING
@@ -1376,12 +2014,25 @@ def handle_callback(cq: Dict[str, Any]) -> None:
     data = cq.get("data", "")
     user = cq.get("from", {})
     user_id = int(user.get("id"))
+    remember_user(user)
     message = cq.get("message", {})
     chat_id = int(message.get("chat", {}).get("id", user_id))
     callback_id = cq.get("id", "")
 
+    if not check_user_allowed(chat_id, user_id):
+        answer_callback(callback_id, "Доступ ограничен", True)
+        return
+
     if data.startswith("cap:"):
         handle_captcha_callback(cq)
+        return
+
+    if not antiflood_ok(chat_id, user_id):
+        answer_callback(callback_id, "Антифлуд 5 сек", True)
+        return
+
+    if data.startswith("admin:"):
+        handle_admin_action(cq)
         return
 
     if not ensure_access(chat_id, user_id):
@@ -1429,9 +2080,6 @@ def handle_callback(cq: Dict[str, Any]) -> None:
     if data.startswith("role:"):
         process_role_callback(cq)
         return
-    if data.startswith("admin:"):
-        handle_admin_action(cq)
-        return
 
     answer_callback(callback_id, "Неизвестная кнопка", True)
 
@@ -1443,16 +2091,30 @@ def handle_message(message: Dict[str, Any]) -> None:
     user = message.get("from", {})
     if not user:
         return
+    remember_user(user)
     user_id = int(user.get("id"))
     text = get_text(message)
+    command = text.split()[0].split("@", 1)[0].lower() if text.startswith("/") else ""
 
-    # Бот рассчитан на личные сообщения. В группах не шумим.
+    # Команды для группы: обновить число участников клана.
     if chat_type != "private":
+        if command in {"/members", "/set_members", "/clan_members", "/set_clan_members"}:
+            if not is_admin(user_id):
+                send_message(chat_id, "Нет доступа. Команда только для админов бота.")
+                return
+            parts = text.split()
+            if len(parts) < 2 or not parts[1].isdigit():
+                send_message(chat_id, "Формат: <code>/members 59</code>")
+                return
+            set_clan_members(int(parts[1]), f"Обновлено в группе: {now_str()}")
+            send_message(chat_id, f"✅ В боте обновлено число участников клана: <b>{int(parts[1])}</b>")
+            return
         if text.startswith("/start") or text.startswith("/help"):
             send_message(chat_id, "Напиши мне в личные сообщения — там доступно меню клана.")
         return
 
-    command = text.split()[0].split("@", 1)[0].lower() if text.startswith("/") else ""
+    if not check_user_allowed(chat_id, user_id):
+        return
 
     if command == "/start":
         clear_state(user_id)
@@ -1469,16 +2131,37 @@ def handle_message(message: Dict[str, Any]) -> None:
         send_message(chat_id, "❌ Действие отменено.", reply_markup=menu_keyboard(user_id))
         return
 
+    if not antiflood_ok(chat_id, user_id):
+        return
+
+    # Админские состояния работают даже без капчи, но только для админов.
+    state = get_state(user_id)
+    if state and is_admin(user_id) and process_admin_state(message, state):
+        return
+
+    if command in {"/members", "/set_members", "/clan_members", "/set_clan_members"}:
+        if not is_admin(user_id):
+            send_admin_denied(chat_id, user_id)
+            return
+        parts = text.split()
+        if len(parts) < 2 or not parts[1].isdigit():
+            send_message(chat_id, "Формат: <code>/members 59</code>", reply_markup=admin_panel_keyboard())
+            return
+        set_clan_members(int(parts[1]), f"Обновлено админом {user_id}: {now_str()}")
+        send_message(chat_id, f"✅ Количество участников обновлено: <b>{int(parts[1])}</b>", reply_markup=admin_panel_keyboard())
+        return
+
+    if command == "/admin":
+        clear_state(user_id)
+        send_admin_panel(chat_id, user_id)
+        return
+
     if not ensure_access(chat_id, user_id):
         return
 
     if command in {"/menu", "/help"}:
         clear_state(user_id)
         send_main_menu(chat_id, user_id)
-        return
-    if command == "/admin":
-        clear_state(user_id)
-        send_admin_panel(chat_id, user_id)
         return
 
     state = get_state(user_id)
@@ -1533,14 +2216,23 @@ def main() -> None:
         username = me.get("username", "unknown")
         print(f"ONLINE @{username}", flush=True)
         print("POLL READY", flush=True)
-        logging.info("ONLINE @%s | DATA_DIR=%s | ADMINS=%s", username, DATA_DIR, sorted(ADMIN_IDS))
+        logging.info("ONLINE @%s | DATA_DIR=%s | ADMINS=%s", username, DATA_DIR, all_admin_ids())
+        try:
+            send_rewrite_notice_once()
+        except Exception as e:
+            logging.warning("rewrite notice failed: %s", e)
     except Exception:
         logging.exception("Cannot get bot info")
         raise
 
     offset: Optional[int] = None
+    last_maintenance = 0.0
     while True:
         try:
+            if time.time() - last_maintenance >= 60:
+                last_maintenance = time.time()
+                auto_accept_applications()
+
             params: Dict[str, Any] = {
                 "timeout": 30,
                 "allowed_updates": json.dumps(["message", "callback_query"]),
