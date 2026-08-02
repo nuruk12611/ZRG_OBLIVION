@@ -1,3 +1,10 @@
+# Koyeb deployment config for ZRG Oblivion Bot with SQLite persistence
+# Внимание: на бесплатном тарифе Koyeb нет постоянных дисков - данные будут теряться при редеплое!
+# Для сохранения данных:
+# 1. Используй Koyeb Volumes (требует платный тариф) или
+# 2. Деплой на Amvera/Render где есть persistent disk
+# 3. Или добавь env BACKUP_CHAT_ID и бот будет слать бэкапы в ТГ
+
 name: zrg-oblivion-bot
 services:
   - name: bot
@@ -15,3 +22,11 @@ services:
         value: ""
       - key: CLAN_NAME
         value: ZRG OBLIVION
+      - key: DATA_DIR
+        value: /data
+      - key: CLAN_MEMBERS
+        value: "59"
+    # volumes: # раскомментируй если есть платный тариф Koyeb
+    #   - path: /data
+    #     name: zrg-data
+    #     size: 1GB

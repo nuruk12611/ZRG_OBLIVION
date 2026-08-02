@@ -11,3 +11,13 @@ services:
         sync: false
       - key: CLAN_NAME
         value: ZRG OBLIVION
+      - key: DATA_DIR
+        value: /data
+      - key: CLAN_MEMBERS
+        value: "59"
+    disks:
+      - name: zrg-data
+        mountPath: /data
+        sizeGB: 1
+
+databases: []

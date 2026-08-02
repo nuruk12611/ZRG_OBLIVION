@@ -266,45 +266,226 @@ def conflict_standby(reason: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# SQLITE DATABASE (встроенная БД внутри бота) + JSON fallback
+# ---------------------------------------------------------------------------
+import sqlite3
+
+DB_PATH = DATA_DIR / "bot.db"
+DB_BACKUP_DIR = DATA_DIR / "backups"
+SQLITE_INIT_DONE = False
+
+def _get_conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(str(DB_PATH), timeout=20, isolation_level=None, check_same_thread=False)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute("PRAGMA temp_store=MEMORY;")
+    except Exception:
+        pass
+    return conn
+
+def _init_sqlite_db() -> None:
+    global SQLITE_INIT_DONE
+    if SQLITE_INIT_DONE:
+        return
+    try:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        DB_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        conn = _get_conn()
+        conn.execute("CREATE TABLE IF NOT EXISTS kv_store (name TEXT PRIMARY KEY, data TEXT NOT NULL)")
+        conn.execute("CREATE TABLE IF NOT EXISTS counters (kind TEXT PRIMARY KEY, value INTEGER NOT NULL)")
+        conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        conn.commit()
+        cur = conn.execute("SELECT COUNT(*) FROM kv_store")
+        count = cur.fetchone()[0]
+        if count == 0:
+            json_files = ["users.json", "states.json", "counters.json", "applications.json", "tickets.json", "appeals.json", "roles.json", "moderation.json", "settings.json"]
+            for fname in json_files:
+                fpath = DATA_DIR / fname
+                if fpath.exists():
+                    try:
+                        data = json.loads(fpath.read_text(encoding="utf-8"))
+                        j = json.dumps(data, ensure_ascii=False, indent=2)
+                        conn.execute("INSERT OR REPLACE INTO kv_store (name, data) VALUES (?,?)", (fname, j))
+                        if fname == "counters.json" and isinstance(data, dict):
+                            for k, v in data.items():
+                                try:
+                                    conn.execute("INSERT OR REPLACE INTO counters (kind, value) VALUES (?,?)", (str(k), int(v)))
+                                except Exception:
+                                    pass
+                    except Exception as e:
+                        logging.warning(f"Migration failed for {fname}: {e}")
+            conn.commit()
+        cur = conn.execute("SELECT COUNT(*) FROM counters")
+        if cur.fetchone()[0] == 0:
+            try:
+                cur2 = conn.execute("SELECT data FROM kv_store WHERE name='counters.json'")
+                row = cur2.fetchone()
+                if row:
+                    cdata = json.loads(row[0])
+                    for k, v in cdata.items():
+                        try:
+                            conn.execute("INSERT OR REPLACE INTO counters (kind, value) VALUES (?,?)", (str(k), int(v)))
+                        except Exception:
+                            pass
+                    conn.commit()
+            except Exception:
+                pass
+        conn.close()
+        SQLITE_INIT_DONE = True
+        logging.info(f"SQLite DB ready: {DB_PATH} (WAL mode)")
+        try:
+            backup_database(force=True)
+        except Exception as e:
+            logging.warning(f"Initial backup failed: {e}")
+    except Exception:
+        logging.exception("Failed to init SQLite DB")
+        SQLITE_INIT_DONE = True
+
+def backup_database(force: bool = False) -> Optional[Path]:
+    try:
+        DB_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        last_backup_file = DB_BACKUP_DIR / "last_backup.txt"
+        if not force and last_backup_file.exists():
+            try:
+                last_ts = float(last_backup_file.read_text().strip())
+                if time.time() - last_ts < 3600:
+                    return None
+            except Exception:
+                pass
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_db = DB_BACKUP_DIR / f"bot_{ts}.db"
+        if DB_PATH.exists():
+            import shutil
+            shutil.copy2(str(DB_PATH), str(backup_db))
+        json_dump_path = DB_BACKUP_DIR / f"dump_{ts}.json"
+        try:
+            conn = _get_conn()
+            cur = conn.execute("SELECT name, data FROM kv_store")
+            rows = cur.fetchall()
+            conn.close()
+            dump = {}
+            for name, data in rows:
+                try:
+                    dump[name] = json.loads(data)
+                except Exception:
+                    dump[name] = data
+            json_dump_path.write_text(json.dumps(dump, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+        try:
+            all_backups = sorted(DB_BACKUP_DIR.glob("bot_*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
+            for old in all_backups[20:]:
+                try:
+                    old.unlink()
+                except Exception:
+                    pass
+            all_dumps = sorted(DB_BACKUP_DIR.glob("dump_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+            for old in all_dumps[20:]:
+                try:
+                    old.unlink()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        last_backup_file.write_text(str(time.time()), encoding="utf-8")
+        return backup_db
+    except Exception:
+        logging.exception("backup_database failed")
+        return None
+
 def now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
 
 def json_path(name: str) -> Path:
     return DATA_DIR / name
 
-
 def read_json(name: str, default: Any) -> Any:
+    try:
+        _init_sqlite_db()
+        conn = _get_conn()
+        cur = conn.execute("SELECT data FROM kv_store WHERE name=?", (name,))
+        row = cur.fetchone()
+        conn.close()
+        if row:
+            return json.loads(row[0])
+    except Exception:
+        logging.exception(f"read_json SQLite failed for {name}")
     path = json_path(name)
     if not path.exists():
         return default
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        logging.exception("Cannot read JSON: %s", path)
+        logging.exception("Cannot read JSON file: %s", path)
         return default
 
-
 def write_json(name: str, data: Any) -> None:
-    path = json_path(name)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
-
+    try:
+        _init_sqlite_db()
+        j = json.dumps(data, ensure_ascii=False, indent=2)
+        conn = _get_conn()
+        conn.execute("INSERT OR REPLACE INTO kv_store (name, data) VALUES (?,?)", (name, j))
+        conn.commit()
+        conn.close()
+    except Exception:
+        logging.exception(f"write_json SQLite failed for {name}")
+    try:
+        path = json_path(name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+    except Exception:
+        logging.exception(f"write_json file backup failed for {name}")
 
 def next_id(kind: str) -> int:
-    counters = read_json("counters.json", {})
-    counters[kind] = int(counters.get(kind, 0)) + 1
-    write_json("counters.json", counters)
-    return counters[kind]
-
+    try:
+        _init_sqlite_db()
+        conn = _get_conn()
+        cur = conn.execute("SELECT value FROM counters WHERE kind=?", (kind,))
+        row = cur.fetchone()
+        if row:
+            new_val = int(row[0]) + 1
+            conn.execute("UPDATE counters SET value=? WHERE kind=?", (new_val, kind))
+        else:
+            try:
+                cur2 = conn.execute("SELECT data FROM kv_store WHERE name='counters.json'")
+                r2 = cur2.fetchone()
+                base = 0
+                if r2:
+                    c = json.loads(r2[0])
+                    base = int(c.get(kind, 0))
+                new_val = base + 1
+            except Exception:
+                new_val = 1
+            conn.execute("INSERT OR REPLACE INTO counters (kind, value) VALUES (?,?)", (kind, new_val))
+        cur_all = conn.execute("SELECT kind, value FROM counters")
+        all_counters = {k: v for k, v in cur_all.fetchall()}
+        j = json.dumps(all_counters, ensure_ascii=False, indent=2)
+        conn.execute("INSERT OR REPLACE INTO kv_store (name, data) VALUES (?,?)", ("counters.json", j))
+        conn.commit()
+        conn.close()
+        try:
+            path = DATA_DIR / "counters.json"
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(j, encoding="utf-8")
+            os.replace(tmp, path)
+        except Exception:
+            pass
+        return new_val
+    except Exception:
+        logging.exception(f"next_id failed for {kind}, fallback to JSON")
+        counters = read_json("counters.json", {})
+        counters[kind] = int(counters.get(kind, 0)) + 1
+        write_json("counters.json", counters)
+        return counters[kind]
 
 def append_record(filename: str, item: Dict[str, Any]) -> None:
     items = read_json(filename, [])
     items.append(item)
     write_json(filename, items)
-
 
 def update_record(filename: str, item_id: int, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     items = read_json(filename, [])
@@ -317,6 +498,7 @@ def update_record(filename: str, item_id: int, updates: Dict[str, Any]) -> Optio
     if found is not None:
         write_json(filename, items)
     return found
+
 
 
 def get_state(user_id: int) -> Optional[Dict[str, Any]]:
@@ -604,6 +786,8 @@ def can_submit_application(user_id: int) -> Tuple[bool, str]:
         if left > 0:
             return False, f"⏳ После отказа новую заявку можно подать через {human_wait(left)}."
     return True, ""
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -2213,13 +2397,53 @@ def send_rewrite_notice_once() -> None:
 def export_data(chat_id: int) -> None:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     export_path = DATA_DIR / f"zrg_export_{ts}.zip"
-    files = ["users.json", "applications.json", "tickets.json", "appeals.json", "counters.json", "roles.json", "moderation.json", "settings.json"]
+    files = ["users.json", "applications.json", "tickets.json", "appeals.json", "counters.json", "roles.json", "moderation.json", "settings.json", "states.json"]
     with zipfile.ZipFile(export_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        # JSON файлы (из файлового бэкапа)
         for name in files:
             path = json_path(name)
             if path.exists():
-                zf.write(path, arcname=name)
-    send_local_document(chat_id, export_path, "📦 Экспорт данных ZRG Bot")
+                try:
+                    zf.write(path, arcname=name)
+                except Exception:
+                    pass
+        # Основной SQLite файл
+        try:
+            if DB_PATH.exists():
+                zf.write(DB_PATH, arcname="bot.db")
+        except Exception:
+            pass
+        # Последние бэкапы
+        try:
+            for p in (DB_BACKUP_DIR.glob("*.db") if DB_BACKUP_DIR.exists() else []):
+                if p.stat().st_size < 20_000_000:  # не включать огромные
+                    zf.write(p, arcname=f"backups/{p.name}")
+            for p in (DB_BACKUP_DIR.glob("*.json") if DB_BACKUP_DIR.exists() else []):
+                zf.write(p, arcname=f"backups/{p.name}")
+        except Exception:
+            pass
+        # Также дамп из SQLite в один большой JSON для удобства
+        try:
+            conn = _get_conn()
+            cur = conn.execute("SELECT name, data FROM kv_store")
+            rows = cur.fetchall()
+            conn.close()
+            dump_dict = {}
+            for name, data in rows:
+                try:
+                    dump_dict[name] = json.loads(data)
+                except Exception:
+                    dump_dict[name] = data
+            dump_bytes = json.dumps(dump_dict, ensure_ascii=False, indent=2).encode("utf-8")
+            zf.writestr(f"full_dump_{ts}.json", dump_bytes)
+        except Exception:
+            pass
+    send_local_document(chat_id, export_path, f"📦 Экспорт данных ZRG Bot (SQLite + JSON) {ts}")
+    # периодический бэкап
+    try:
+        backup_database(force=False)
+    except Exception:
+        pass
 
 # ---------------------------------------------------------------------------
 # UPDATE ROUTING
@@ -2415,6 +2639,14 @@ def main() -> None:
     if not BOT_TOKEN:
         print("ERROR: BOT_TOKEN not set. Создай .env или переменную окружения BOT_TOKEN.", file=sys.stderr)
         sys.exit(1)
+
+    # Инициализируем SQLite БД сразу после проверки токена
+    try:
+        _init_sqlite_db()
+        print(f"DB INIT: {DB_PATH} exists={DB_PATH.exists()} DATA_DIR={DATA_DIR}", flush=True)
+        logging.info(f"SQLite DB initialized: {DB_PATH} size={DB_PATH.stat().st_size if DB_PATH.exists() else 0} bytes")
+    except Exception as e:
+        logging.exception(f"DB init error: {e}")
 
     if not acquire_single_instance_lock():
         print(
