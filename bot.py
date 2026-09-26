@@ -12,6 +12,7 @@ import uuid
 import os
 import socket
 import base64
+import random
 from datetime import datetime
 
 import aiohttp
@@ -34,9 +35,9 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 
 # ----------------- CONFIG -----------------
-BOT_TOKEN = "8965669865:AAHk4KKEM5AAFxj_mNyKeVs5zzq-htrGRq4"
-BOT_USERNAME = "vpnbot14432_bot"
-BRAND_NAME = "Welwes VPN"
+BOT_TOKEN = "8654262772:AAE25u8FCFM2--qwQwa8vaXVTQQiRJ2sGZw"
+BOT_USERNAME = "WelwesVPN_bot"
+BRAND_NAME = "WelwesVPN"
 SUPPORT_USERNAME = "welwesvpn"
 SECRET_ADMIN_KEY = "welwes2026"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -44,12 +45,13 @@ DB_PATH = os.path.join(BASE_DIR, "users.db")
 BANNER_PATH = os.path.join(BASE_DIR, "welwes_banner.jpg")
 AVATAR_PATH = os.path.join(BASE_DIR, "welwes_avatar.png")
 
-# Live Subscription Endpoint on Germany node:
-MASTER_SUB_URL = "http://germany-d4.h1cloud.net:25132/sub/a8c648dd-96e0-4db7-a4f4-5288986f6a9a"
+# Live Unified Subscription Endpoint (Germany + Finland):
+MASTER_SUB_URL = "http://fi4.h1cloud.net:26104/sub/a6272d65-ea37-4285-ad0c-ce1b7f305b2b"
 
 # Direct VLESS strings:
-GERMANY_VLESS = "vless://a8c648dd-96e0-4db7-a4f4-5288986f6a9a@germany-d4.h1cloud.net:25133?type=tcp&security=reality&sni=www.microsoft.com&fp=chrome&pbk=7chjcukFlC6QB_UOdc4D5VYD1ElsdaZHHb9sGrfcvUQ&sid=7a220762ea8b1f10&spx=%2F&encryption=none#🇩🇪 Германия · YouTube 4K (100M)"
-FINLAND_VLESS = "vless://a8c648dd-96e0-4db7-a4f4-5288986f6a9a@fi4.h1cloud.net:26105?type=tcp&security=reality&sni=dl.google.com&fp=chrome&pbk=j6fX9DcQuNiixZxON6sm6yulBlkys11Z8vAtIWjMwhw&sid=a01d409410c3660f&spx=%2F&encryption=none#🇫🇮 Финляндия · Игры & Discord (20ms)"
+GERMANY_VLESS = "vless://a6272d65-ea37-4285-ad0c-ce1b7f305b2b@germany-d4.h1cloud.net:25133?type=tcp&security=reality&sni=dl.google.com&fp=chrome&pbk=5YzC4doB6AZ1X1EdgMgV2tQuG41fjzDynaCntp_ciw4&sid=e74dcb7a6d3cc766&spx=%2F&encryption=none#🇩🇪 Германия · YouTube 4K (100M)"
+FINLAND_VLESS = "vless://a6272d65-ea37-4285-ad0c-ce1b7f305b2b@fi4.h1cloud.net:26105?type=tcp&security=reality&sni=dl.google.com&fp=chrome&pbk=oHYPUcx0-_fhmwLQUQcWXpozqYK02fF5iPGC-7fg_iA&sid=c7017bdc272c7b2e&spx=%2F&encryption=none#🇫🇮 Финляндия · Игры & Discord (20ms)"
+USA_VLESS = "vless://a6272d65-ea37-4285-ad0c-ce1b7f305b2b@us3.h1cloud.net:25561?type=tcp&security=reality&sni=dl.google.com&fp=chrome&pbk=p63_QLlRrs-Mo4COFFiHbumCJMZLdKravPnU11N8HEA&sid=fcebf3479252cad4&spx=%2F&encryption=none#🇺🇸 США · ChatGPT & Стриминг (100M)"
 
 # ----------------- TARIFFS & PROMO -----------------
 PROMO_DISCOUNT_PERCENT = 45
@@ -147,6 +149,19 @@ def init_db():
             amount INTEGER,
             timestamp INTEGER,
             status TEXT DEFAULT 'pending'
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS reviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            username TEXT,
+            rating INTEGER,
+            text TEXT,
+            photo_id TEXT DEFAULT NULL,
+            tariff TEXT,
+            created_at INTEGER,
+            status TEXT DEFAULT 'approved'
         )
     """)
     conn.commit()
@@ -353,11 +368,31 @@ def generate_sub_bundle_b64(user_id: int = 0) -> str:
     lines = [
         f"vless://00000000-0000-0000-0000-000000000000@0.0.0.0:1?encryption=none&type=tcp&security=none#⚡️ Наш бот: @{BOT_USERNAME}",
         f"vless://00000000-0000-0000-0000-000000000000@0.0.0.0:1?encryption=none&type=tcp&security=none#💬 Поддержка: @{SUPPORT_USERNAME}",
-        GERMANY_VLESS,
-        FINLAND_VLESS
+        FINLAND_VLESS,
+        USA_VLESS,
+        GERMANY_VLESS
     ]
     raw_content = "\n".join(lines) + "\n"
     return base64.b64encode(raw_content.encode("utf-8")).decode("utf-8")
+
+# ----------------- REVIEWS DATABASE HELPERS -----------------
+def add_review(user_id: int, username: str, rating: int, text: str, photo_id: str, tariff: str):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO reviews (user_id, username, rating, text, photo_id, tariff, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (user_id, username, rating, text, photo_id, tariff, int(time.time())))
+    conn.commit()
+    conn.close()
+
+def has_user_reviewed(user_id: int) -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM reviews WHERE user_id = ?", (user_id,))
+    count = c.fetchone()[0]
+    conn.close()
+    return count > 0
 
 # ----------------- FSM STATES -----------------
 class Form(StatesGroup):
@@ -366,6 +401,9 @@ class Form(StatesGroup):
     waiting_for_admin_reply = State()
     waiting_for_broadcast = State()
     waiting_for_sbp_link = State()
+    waiting_for_reviews_channel = State()
+    waiting_for_review_rating = State()
+    waiting_for_review_text = State()
 
 # ----------------- KEYBOARDS -----------------
 def main_menu_kb(user_id: int):
@@ -379,10 +417,13 @@ def main_menu_kb(user_id: int):
     if not has_sub and not trial_used:
         kb.append([InlineKeyboardButton(text="🎁 Попробовать бесплатно (6 часов)", callback_data="get_trial")])
 
-    # Exact layout matching user's reference screenshot:
+    # Exact layout matching user's reference screenshot + Reviews:
     kb.append([InlineKeyboardButton(text="💳 Покупка | Продление", callback_data="buy_menu")])
     kb.append([InlineKeyboardButton(text="🔑 Мои ключи", callback_data="my_keys")])
-    kb.append([InlineKeyboardButton(text="👥 Партнёрская программа", callback_data="affiliate")])
+    kb.append([
+        InlineKeyboardButton(text="⭐️ Отзывы", callback_data="reviews_menu"),
+        InlineKeyboardButton(text="👥 Партнёрка", callback_data="affiliate")
+    ])
     kb.append([InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="invite_friend")])
     kb.append([InlineKeyboardButton(text="ℹ️ Поддержка ↗", url=f"https://t.me/{SUPPORT_USERNAME}")])
 
@@ -391,11 +432,36 @@ def main_menu_kb(user_id: int):
 
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
+def reviews_menu_kb():
+    ch = get_setting("reviews_channel", "@welwes_reviews")
+    ch_url = f"https://t.me/{ch.lstrip('@')}"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✍️ Оставить отзыв (Бонус 1–12ч 🎁)", callback_data="leave_review")],
+        [InlineKeyboardButton(text="📢 Читать отзывы в канале ↗", url=ch_url)],
+        [InlineKeyboardButton(text="◀️ В главное меню", callback_data="back_main")]
+    ])
+
+def review_rating_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="⭐️ 5", callback_data="rev_rate_5"),
+            InlineKeyboardButton(text="⭐️ 4", callback_data="rev_rate_4"),
+            InlineKeyboardButton(text="⭐️ 3", callback_data="rev_rate_3"),
+            InlineKeyboardButton(text="⭐️ 2", callback_data="rev_rate_2"),
+            InlineKeyboardButton(text="⭐️ 1", callback_data="rev_rate_1")
+        ],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="back_main")]
+    ])
+
 def sub_active_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📋 Скопировать ссылку подписки", callback_data="copy_sub")],
         [InlineKeyboardButton(text="📦 Скопировать Base64 ключ (Всё в 1)", callback_data="copy_bundle")],
-        [InlineKeyboardButton(text="🇩🇪 Ключ Германия", callback_data="copy_de"), InlineKeyboardButton(text="🇫🇮 Ключ Финляндия", callback_data="copy_fi")],
+        [
+            InlineKeyboardButton(text="🇫🇮 Финляндия", callback_data="copy_fi"),
+            InlineKeyboardButton(text="🇺🇸 США", callback_data="copy_us"),
+            InlineKeyboardButton(text="🇩🇪 Германия", callback_data="copy_de")
+        ],
         [InlineKeyboardButton(text="📁 Скачать файл подписки (.txt)", callback_data="download_sub_file")],
         [InlineKeyboardButton(text="📖 Инструкция по подключению", callback_data="instructions")],
         [InlineKeyboardButton(text="◀️ В главное меню", callback_data="back_main")]
@@ -446,6 +512,7 @@ def admin_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="♾️ Выдать себе вечный VPN (100 дней)", callback_data="admin_self_sub")],
         [InlineKeyboardButton(text="⭐ Баланс и вывод Звёзд (Stars)", callback_data="admin_stars_balance")],
+        [InlineKeyboardButton(text="📢 Настроить канал отзывов", callback_data="admin_set_reviews_ch")],
         [InlineKeyboardButton(text="🔗 Настроить ссылку СБП для оплаты", callback_data="admin_set_sbp")],
         [InlineKeyboardButton(text="🖼️ Получить официальную Аву бота", callback_data="admin_get_avatar")],
         [InlineKeyboardButton(text="🎟️ Создать промокод для FunPay", callback_data="admin_gen_promo")],
@@ -545,7 +612,7 @@ async def cb_get_trial(call: CallbackQuery):
         f"1. Скопируйте ссылку выше (нажмите на неё).\n"
         f"2. Откройте приложение **Happ** (или Hiddify / Streisand).\n"
         f"3. Нажмите **«+» → Добавить подписку** и вставьте ссылку!\n"
-        f"4. Серверы **Германия** и **Финляндия** добавятся автоматически!\n\n"
+        f"4. Серверы **Финляндия**, **США** и **Германия** добавятся автоматически!\n\n"
         f"💡 *Совет: если в Happ пишет 'u/a' или нет доступа к сети, в настройках Happ (DNS) выберите DoH (Cloudflare 1.1.1.1).* "
     )
     await call.message.answer(text, reply_markup=sub_active_kb(), parse_mode="Markdown")
@@ -578,8 +645,9 @@ async def cb_my_keys(call: CallbackQuery):
         f"⏳ **Статус:** 🟢 АКТИВНА\n"
         f"📅 **Действует до:** `{expire_dt}` (осталось ~{days_left} дн. {hours_left} ч.)\n\n"
         f"🌍 **Входящие локации:**\n"
-        f"• 🇩🇪 **Германия** — YouTube 4K 60FPS (100 Mbit/s)\n"
-        f"• 🇫🇮 **Финляндия** — Discord & Игры (пинг 20ms)\n\n"
+        f"• 🇫🇮 **Финляндия** — Discord & Игры (пинг 20ms)\n"
+        f"• 🇺🇸 **США** — ChatGPT & Стриминг (100 Mbit/s)\n"
+        f"• 🇩🇪 **Германия** — YouTube 4K 60FPS (100 Mbit/s)\n\n"
         f"🔗 **Ваша универсальная ссылка подписки:**\n"
         f"`{MASTER_SUB_URL}`\n\n"
         f"👇 *Используйте кнопки ниже для быстрого копирования или скачивания конфигурации:*"
@@ -602,20 +670,25 @@ async def cb_copy_bundle(call: CallbackQuery):
         parse_mode="Markdown"
     )
 
-@dp.callback_query(F.data == "copy_de")
-async def cb_copy_de(call: CallbackQuery):
-    await call.answer("Ключ Германия отправлен!")
-    await call.message.answer(f"🇩🇪 **Прямой ключ Германия (VLESS Reality):**\n`{GERMANY_VLESS}`", parse_mode="Markdown")
-
 @dp.callback_query(F.data == "copy_fi")
 async def cb_copy_fi(call: CallbackQuery):
     await call.answer("Ключ Финляндия отправлен!")
     await call.message.answer(f"🇫🇮 **Прямой ключ Финляндия (VLESS Reality):**\n`{FINLAND_VLESS}`", parse_mode="Markdown")
 
+@dp.callback_query(F.data == "copy_us")
+async def cb_copy_us(call: CallbackQuery):
+    await call.answer("Ключ США отправлен!")
+    await call.message.answer(f"🇺🇸 **Прямой ключ США (VLESS Reality):**\n`{USA_VLESS}`", parse_mode="Markdown")
+
+@dp.callback_query(F.data == "copy_de")
+async def cb_copy_de(call: CallbackQuery):
+    await call.answer("Ключ Германия отправлен!")
+    await call.message.answer(f"🇩🇪 **Прямой ключ Германия (VLESS Reality):**\n`{GERMANY_VLESS}`", parse_mode="Markdown")
+
 @dp.callback_query(F.data == "download_sub_file")
 async def cb_download_sub_file(call: CallbackQuery):
     await call.answer()
-    raw_content = f"{GERMANY_VLESS}\n{FINLAND_VLESS}\n"
+    raw_content = f"{FINLAND_VLESS}\n{USA_VLESS}\n{GERMANY_VLESS}\n"
     file_bytes = raw_content.encode("utf-8")
     doc = BufferedInputFile(file_bytes, filename=f"WelwesVPN_Config_{call.from_user.id}.txt")
     await call.message.answer_document(doc, caption="📁 **Ваш готовый файл конфигурации Welwes VPN!**\n\nОткройте его через приложение Happ или Hiddify.")
@@ -1146,6 +1219,173 @@ async def process_set_sbp_link(message: Message, state: FSMContext):
         return
     set_setting("sbp_link", new_url)
     await message.answer(f"✅ **Ссылка СБП успешно обновлена!**\n\nТеперь при нажатии «Оплатить» клиенты будут переходить по этой ссылке:\n`{new_url}`", reply_markup=admin_kb(), parse_mode="Markdown")
+
+# --- REVIEWS WORKFLOW ---
+@dp.callback_query(F.data == "reviews_menu")
+async def cb_reviews_menu(call: CallbackQuery):
+    await call.answer()
+    ch = get_setting("reviews_channel", "@welwes_reviews")
+    text = (
+        f"⭐️ **Отзывы клиентов {BRAND_NAME}:**\n\n"
+        f"В нашем официальном канале вы можете посмотреть честные отзывы пользователей, реальные замеры скорости и скриншоты пинга в играх!\n\n"
+        f"🎁 **Акция:** Оставьте отзыв и получите **случайный подарок от +1 до +12 часов** бесплатного VPN!\n"
+        f"*(Бонус начисляется 1 раз за первый отзыв)*\n\n"
+        f"📢 Официальный канал отзывов: `{ch}`"
+    )
+    await call.message.answer(text, reply_markup=reviews_menu_kb(), parse_mode="Markdown")
+
+@dp.callback_query(F.data == "leave_review")
+async def cb_leave_review(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    user = get_user(call.from_user.id)
+    now = int(time.time())
+    if not user or (user[5] <= now and user[4] == 0):
+        await call.message.answer(
+            "❌ **Оставить отзыв могут только пользователи, которые протестировали или купили Welwes VPN.**\n\n"
+            "Пожалуйста, сначала активируйте бесплатный тест на 6 часов или оформите подписку!",
+            reply_markup=main_menu_kb(call.from_user.id),
+            parse_mode="Markdown"
+        )
+        return
+
+    await state.set_state(Form.waiting_for_review_rating)
+    text = (
+        f"✍️ **Оценка сервиса {BRAND_NAME}:**\n\n"
+        f"Пожалуйста, оцените качество работы нашего VPN от 1 до 5 звёзд:"
+    )
+    await call.message.answer(text, reply_markup=review_rating_kb(), parse_mode="Markdown")
+
+@dp.callback_query(F.data.startswith("rev_rate_"))
+async def cb_rev_rate(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    rating = int(call.data.replace("rev_rate_", ""))
+    await state.update_data(rating=rating)
+    await state.set_state(Form.waiting_for_review_text)
+
+    stars_str = "⭐️" * rating
+    text = (
+        f"⭐ **Вы выбрали оценку:** {stars_str} ({rating}/5)\n\n"
+        f"💬 Теперь напишите **текст вашего отзыва** (как вам скорость, пинг, YouTube 4K, игры).\n\n"
+        f"📸 *Вы также можете отправить отзыв вместе со скриншотом Speedtest!*"
+    )
+    await call.message.answer(text, reply_markup=back_kb(), parse_mode="Markdown")
+
+@dp.message(Form.waiting_for_review_text, F.photo)
+@dp.message(Form.waiting_for_review_text, F.text)
+async def process_review_submission(message: Message, state: FSMContext):
+    data = await state.get_data()
+    rating = data.get("rating", 5)
+    await state.clear()
+
+    review_text = message.caption if message.photo else message.text
+    if not review_text:
+        review_text = "Отличный сервис, скорость супер!"
+
+    photo_id = message.photo[-1].file_id if message.photo else None
+    user = get_user(message.from_user.id)
+    now = int(time.time())
+
+    tariff_name = "Подписка Welwes VPN"
+    if user and user[5] > now:
+        days_total = max(1, int((user[5] - now) / 86400))
+        tariff_name = f"Активная подписка ({days_total} дн.)"
+    elif user and user[4] == 1:
+        tariff_name = "Тестовый период (6 часов)"
+
+    username_str = f"@{message.from_user.username}" if message.from_user.username else (message.from_user.first_name or "Клиент Welwes VPN")
+
+    # Anti-abuse check: was bonus already granted to this user before?
+    already_reviewed = has_user_reviewed(message.from_user.id)
+    random_hours = random.randint(1, 12)
+    bonus_fraction_days = round(random_hours / 24, 4)
+
+    # Save to database
+    add_review(message.from_user.id, username_str, rating, review_text, photo_id, tariff_name)
+
+    # Reward user if first review
+    if not already_reviewed:
+        set_sub(message.from_user.id, bonus_fraction_days)
+        bonus_note = f"🎁 Вам начислено **+{random_hours} ч.** бесплатной подписки в подарок!"
+    else:
+        bonus_note = "ℹ️ Вы уже получали подарочный бонус за первый отзыв. Ваш новый отзыв сохранён!"
+
+    # Send to reviews channel
+    channel_id = get_setting("reviews_channel", "@welwes_reviews")
+    stars_str = "⭐️" * rating
+    caption = (
+        f"{stars_str} **Новый отзыв о {BRAND_NAME}!**\n\n"
+        f"👤 **Клиент:** {username_str}\n"
+        f"💳 **Тариф:** `{tariff_name}`\n"
+        f"⭐ **Оценка:** {rating} из 5 ({stars_str})\n\n"
+        f"💬 **Отзыв:**\n«{review_text}»\n\n"
+        f"🚀 **Подключить {BRAND_NAME}:** @{BOT_USERNAME}"
+    )
+
+    try:
+        if photo_id:
+            await bot.send_photo(chat_id=channel_id, photo=photo_id, caption=caption, parse_mode="Markdown")
+        else:
+            await bot.send_message(chat_id=channel_id, text=caption, parse_mode="Markdown")
+    except Exception as e:
+        logging.warning(f"Could not send review to channel {channel_id}: {e}")
+
+    # Notify admins
+    admins = get_all_admins()
+    for aid in admins:
+        try:
+            await bot.send_message(
+                aid,
+                f"🔔 **Новый отзыв в боте от {username_str} ({rating}/5)!**\n(Бонус: +{random_hours}ч)\n\n«{review_text}»",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+
+    success_text = (
+        f"🎉 **Огромное спасибо за ваш отзыв!**\n\n"
+        f"{bonus_note}\n\n"
+        f"📢 Ваш отзыв опубликован в официальном канале `{channel_id}`!"
+    )
+    await message.answer(success_text, reply_markup=main_menu_kb(message.from_user.id), parse_mode="Markdown")
+
+# --- ADMIN REVIEWS CHANNEL SETTING ---
+@dp.callback_query(F.data == "admin_set_reviews_ch")
+async def cb_admin_set_reviews_ch(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    if not is_admin(call.from_user.id):
+        return
+    current_ch = get_setting("reviews_channel", "@welwes_reviews")
+    await state.set_state(Form.waiting_for_reviews_channel)
+    text = (
+        f"📢 **Настройка канала с отзывами:**\n\n"
+        f"Текущий канал: `{current_ch}`\n\n"
+        f"Отправьте юзернейм канала (например: `@welwes_reviews` или ссылку) ответным сообщением:\n\n"
+        f"*(Не забудьте добавить бота @{BOT_USERNAME} в этот канал как администратора с правом публиковать сообщения)*"
+    )
+    await call.message.answer(text, reply_markup=back_kb(), parse_mode="Markdown")
+
+@dp.message(Form.waiting_for_reviews_channel)
+async def process_set_reviews_channel(message: Message, state: FSMContext):
+    await state.clear()
+    ch = message.text.strip()
+    if not ch.startswith("@") and not ch.startswith("https://t.me/"):
+        ch = "@" + ch
+    set_setting("reviews_channel", ch)
+    await message.answer(f"✅ **Канал для отзывов успешно установлен:** `{ch}`\n\n*Убедитесь, что бот @{BOT_USERNAME} добавлен в него как администратор!*", reply_markup=admin_kb(), parse_mode="Markdown")
+
+@dp.message(Command("set_reviews_channel"))
+async def cmd_set_reviews_channel(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer("ℹ️ Использование: `/set_reviews_channel @название_канала`", parse_mode="Markdown")
+        return
+    ch = parts[1].strip()
+    if not ch.startswith("@") and not ch.startswith("https://t.me/"):
+        ch = "@" + ch
+    set_setting("reviews_channel", ch)
+    await message.answer(f"✅ **Канал для отзывов успешно установлен:** `{ch}`\n\n*Убедитесь, что бот @{BOT_USERNAME} добавлен в этот канал как администратор с правом публикации!*", parse_mode="Markdown")
 
 # --- CANCEL PAYMENT HANDLER ---
 @dp.message(F.text == "🔴 Отменить оплату")
