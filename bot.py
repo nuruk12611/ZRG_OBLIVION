@@ -79,26 +79,6 @@ def get_tariff_prices(tid: str, is_discount_active: bool):
 
 logging.basicConfig(level=logging.INFO)
 
-# ----------------- RELIABLE NETWORK RESOLVER -----------------
-# Bypasses RKN IP throttling for api.telegram.org by resolving to working Telegram node (2.4ms ping):
-class TelegramCustomResolver(ThreadedResolver):
-    async def resolve(self, host, port=0, family=socket.AF_INET):
-        if host == "api.telegram.org":
-            return [{
-                "hostname": host,
-                "host": "149.154.167.199",
-                "port": port,
-                "family": family,
-                "proto": 0,
-                "flags": socket.AI_NUMERICHOST
-            }]
-        return await super().resolve(host, port, family)
-
-class DirectAiohttpSession(AiohttpSession):
-    async def create_session(self) -> aiohttp.ClientSession:
-        connector = aiohttp.TCPConnector(resolver=TelegramCustomResolver())
-        return aiohttp.ClientSession(connector=connector)
-
 # ----------------- DATABASE -----------------
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -522,8 +502,7 @@ def admin_kb():
     ])
 
 # ----------------- BOT SETUP -----------------
-session = DirectAiohttpSession()
-bot = Bot(token=BOT_TOKEN, session=session)
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
 # ----------------- HANDLERS -----------------
