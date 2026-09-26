@@ -53,6 +53,7 @@ MASTER_SUB_URL = "http://fi4.h1cloud.net:26104/sub/a6272d65-ea37-4285-ad0c-ce1b7
 GERMANY_VLESS = "vless://a6272d65-ea37-4285-ad0c-ce1b7f305b2b@germany-d4.h1cloud.net:25133?type=tcp&security=reality&sni=dl.google.com&fp=chrome&pbk=5YzC4doB6AZ1X1EdgMgV2tQuG41fjzDynaCntp_ciw4&sid=e74dcb7a6d3cc766&spx=%2F&encryption=none#🇩🇪 Германия · YouTube 4K (100M)"
 FINLAND_VLESS = "vless://a6272d65-ea37-4285-ad0c-ce1b7f305b2b@fi4.h1cloud.net:26105?type=tcp&security=reality&sni=dl.google.com&fp=chrome&pbk=oHYPUcx0-_fhmwLQUQcWXpozqYK02fF5iPGC-7fg_iA&sid=c7017bdc272c7b2e&spx=%2F&encryption=none#🇫🇮 Финляндия · Игры & Discord (20ms)"
 USA_VLESS = "vless://a6272d65-ea37-4285-ad0c-ce1b7f305b2b@us3.h1cloud.net:25561?type=tcp&security=reality&sni=dl.google.com&fp=chrome&pbk=p63_QLlRrs-Mo4COFFiHbumCJMZLdKravPnU11N8HEA&sid=fcebf3479252cad4&spx=%2F&encryption=none#🇺🇸 США · ChatGPT & Стриминг (100M)"
+DEFAULT_WEBAPP_URL = "https://nuruk12611.github.io/ZRG_OBLIVION/webapp/"
 
 # ----------------- TARIFFS & PROMO -----------------
 PROMO_DISCOUNT_PERCENT = 45
@@ -394,7 +395,7 @@ def main_menu_kb(user_id: int):
     has_sub = user and user[5] > now
     trial_used = user and user[4] == 1
     admin = is_admin(user_id)
-    webapp_url = get_setting("webapp_url", "")
+    webapp_url = get_setting("webapp_url", DEFAULT_WEBAPP_URL)
 
     kb = []
     if webapp_url:
@@ -1472,7 +1473,7 @@ async def main():
     print(f"• Friend Discount: -{FRIEND_DISCOUNT_PERCENT}% / Bonus: +{FRIEND_BONUS_HOURS}h")
     print(f"• Master Sub URL: {MASTER_SUB_URL}")
     
-    webapp_url = get_setting("webapp_url", "")
+    webapp_url = get_setting("webapp_url", DEFAULT_WEBAPP_URL)
     if webapp_url:
         try:
             await bot.set_chat_menu_button(
