@@ -387,6 +387,8 @@ class Form(StatesGroup):
     waiting_for_review_rating = State()
     waiting_for_review_text = State()
     waiting_for_webapp_url = State()
+    waiting_for_give_sub_user = State()
+    waiting_for_give_sub_days = State()
 
 # ----------------- KEYBOARDS -----------------
 def main_menu_kb(user_id: int):
@@ -400,12 +402,15 @@ def main_menu_kb(user_id: int):
     kb = []
     if webapp_url:
         sub_time = user[5] if user else 0
-        trial_flag = 1 if (user and user[4] == 1) else 0
-        u_url = f"{webapp_url}?sub={sub_time}&trial={trial_flag}&id={user_id}"
+        trial_flag = 1 if (user and user[4] == 1 and user[5] > now) else 0
+        trial_used_flag = 1 if trial_used else 0
+        admin_flag = 1 if admin else 0
+        u_name = user[2] if (user and user[2]) else (user[1] if user else "")
+        u_url = f"{webapp_url}?sub={sub_time}&trial={trial_flag}&trial_used={trial_used_flag}&id={user_id}&admin={admin_flag}&name={html.escape(str(u_name))}"
         kb.append([InlineKeyboardButton(text="⚡ Открыть WelwesVPN (App)", web_app=types.WebAppInfo(url=u_url))])
 
     if not has_sub and not trial_used:
-        kb.append([InlineKeyboardButton(text="🎁 Попробовать бесплатно (6 часов)", callback_data="get_trial")])
+        kb.append([InlineKeyboardButton(text="🎁 Активировать пробный период (6 часов)", callback_data="get_trial")])
 
     # Exact layout matching user's reference screenshot + Reviews:
     kb.append([InlineKeyboardButton(text="💳 Покупка | Продление", callback_data="buy_menu")])
@@ -424,10 +429,17 @@ def main_menu_kb(user_id: int):
 
 def reviews_menu_kb():
     ch = get_setting("reviews_channel", "@welwes_reviews")
-    ch_url = f"https://t.me/{ch.lstrip('@')}"
+    link = get_setting("reviews_channel_link", "")
+    if not link:
+        if ch.startswith("@"):
+            link = f"https://t.me/{ch.lstrip('@')}"
+        elif ch.startswith("https://t.me/"):
+            link = ch
+        else:
+            link = "https://t.me/welwes_reviews"
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✍️ Оставить отзыв (Бонус 1–12ч 🎁)", callback_data="leave_review")],
-        [InlineKeyboardButton(text="📢 Читать отзывы в канале ↗", url=ch_url)],
+        [InlineKeyboardButton(text="📢 Читать отзывы в канале ↗", url=link)],
         [InlineKeyboardButton(text="◀️ В главное меню", callback_data="back_main")]
     ])
 
@@ -506,6 +518,7 @@ def back_kb():
 def admin_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="♾️ Выдать себе вечный VPN (100 дней)", callback_data="admin_self_sub")],
+        [InlineKeyboardButton(text="👑 Выдать подписку пользователю", callback_data="admin_give_sub_prompt")],
         [InlineKeyboardButton(text="⭐ Баланс и вывод Звёзд (Stars)", callback_data="admin_stars_balance")],
         [InlineKeyboardButton(text="📢 Настроить канал отзывов", callback_data="admin_set_reviews_ch")],
         [InlineKeyboardButton(text="🔗 Настроить ссылку СБП для оплаты", callback_data="admin_set_sbp")],
@@ -514,6 +527,7 @@ def admin_kb():
         [InlineKeyboardButton(text="🌐 Настроить Telegram Mini App (Web App)", callback_data="admin_set_webapp")],
         [InlineKeyboardButton(text="📊 Статистика пользователей", callback_data="admin_stats")],
         [InlineKeyboardButton(text="📢 Рассылка всем пользователям", callback_data="admin_broadcast_prompt")],
+        [InlineKeyboardButton(text="📁 Скачать базу users.db", callback_data="admin_get_db")],
         [InlineKeyboardButton(text="◀️ Выйти в меню", callback_data="back_main")]
     ])
 
@@ -521,79 +535,26 @@ def admin_kb():
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# ----------------- HANDLERS -----------------
-@dp.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext):
-    await state.clear()
-    
-    # Check referral start:
-    ref_id = None
-    args = message.text.split(maxsplit=1)
-    if len(args) > 1 and args[1].startswith("ref_"):
-        try:
-            potential_ref = int(args[1].replace("ref_", ""))
-            if potential_ref != message.from_user.id:
-                ref_id = potential_ref
-        except Exception:
-            pass
-
-    register_user(message.from_user.id, message.from_user.username, message.from_user.first_name, ref_id)
-
-    # In Raketa VPN style: clean banner with buttons directly attached:
-    if os.path.exists(BANNER_PATH):
-        try:
-            photo = FSInputFile(BANNER_PATH)
-            await message.answer_photo(photo, reply_markup=main_menu_kb(message.from_user.id))
-            return
-        except Exception as e:
-            logging.error(f"Error sending banner: {e}")
-
-    await message.answer(f"⚡ **Добро пожаловать в {BRAND_NAME}!**", reply_markup=main_menu_kb(message.from_user.id), parse_mode="Markdown")
-
-@dp.message(Command("admin"))
-async def cmd_admin(message: Message, state: FSMContext):
-    parts = message.text.split()
-    if len(parts) > 1 and parts[1] == SECRET_ADMIN_KEY:
-        make_admin(message.from_user.id)
-        await message.answer("👑 **Поздравляю, Создатель! Права администратора успешно активированы!**", reply_markup=admin_kb(), parse_mode="Markdown")
-    elif is_admin(message.from_user.id):
-        await message.answer("👑 **Панель Создателя Welwes VPN:**", reply_markup=admin_kb(), parse_mode="Markdown")
-    else:
-        await message.answer("🔒 Введите пароль администратора в формате:\n`/admin welwes2026`", parse_mode="Markdown")
-
-@dp.callback_query(F.data == "back_main")
-async def cb_back_main(call: CallbackQuery, state: FSMContext):
-    await call.answer()
-    await state.clear()
-    if os.path.exists(BANNER_PATH):
-        photo = FSInputFile(BANNER_PATH)
-        await call.message.answer_photo(photo, reply_markup=main_menu_kb(call.from_user.id))
-    else:
-        await call.message.answer(f"⚡ **Главное меню {BRAND_NAME}:**", reply_markup=main_menu_kb(call.from_user.id), parse_mode="Markdown")
-
-# --- TRIAL ---
-@dp.callback_query(F.data == "get_trial")
-async def cb_get_trial(call: CallbackQuery):
-    await call.answer()
-    user = get_user(call.from_user.id)
+# ----------------- TRIAL HELPER -----------------
+async def do_activate_trial(user_id: int, username: str = "", first_name: str = "") -> tuple[bool, str]:
+    user = get_user(user_id)
     if not user:
-        register_user(call.from_user.id, call.from_user.username, call.from_user.first_name)
-        user = get_user(call.from_user.id)
+        register_user(user_id, username, first_name)
+        user = get_user(user_id)
     
     if user[4] == 1:
-        await call.message.answer("Вы уже использовали бесплатный пробный период!")
-        return
+        return False, "❌ **Вы уже использовали бесплатный пробный период!**"
 
-    _, ref_id = set_sub(call.from_user.id, 0.25) # 6 hours = 0.25 days
-    set_trial_used(call.from_user.id)
+    _, ref_id = set_sub(user_id, 0.25) # 6 hours = 0.25 days
+    set_trial_used(user_id)
 
     # Reward referrer if exists (+6 hours):
     if ref_id:
         try:
-            set_sub(ref_id, 0.25) # +6 hours bonus
+            set_sub(ref_id, 0.25)
             await bot.send_message(
                 ref_id,
-                f"🎉 **Ваш друг {call.from_user.first_name} активировал Welwes VPN!**\nВам начислено **+6 часов** бесплатной подписки в подарок!",
+                f"🎉 **Ваш друг {first_name or user_id} активировал Welwes VPN!**\nВам начислено **+6 часов** бесплатной подписки в подарок!",
                 parse_mode="Markdown"
             )
         except Exception:
@@ -610,7 +571,113 @@ async def cb_get_trial(call: CallbackQuery):
         f"4. Серверы **Финляндия**, **США** и **Германия** добавятся автоматически!\n\n"
         f"💡 *Совет: если в Happ пишет 'u/a' или нет доступа к сети, в настройках Happ (DNS) выберите DoH (Cloudflare 1.1.1.1).* "
     )
-    await call.message.answer(text, reply_markup=sub_active_kb(), parse_mode="Markdown")
+    return True, text
+
+# ----------------- HANDLERS -----------------
+@dp.message(CommandStart())
+async def cmd_start(message: Message, state: FSMContext):
+    await state.clear()
+    
+    # Check referral or deep action start:
+    ref_id = None
+    args = message.text.split(maxsplit=1)
+    if len(args) > 1:
+        param = args[1].strip()
+        if param.startswith("ref_"):
+            try:
+                potential_ref = int(param.replace("ref_", ""))
+                if potential_ref != message.from_user.id:
+                    ref_id = potential_ref
+            except Exception:
+                pass
+        elif param in ("trial", "get_trial"):
+            register_user(message.from_user.id, message.from_user.username, message.from_user.first_name, ref_id)
+            ok, txt = await do_activate_trial(message.from_user.id, message.from_user.username, message.from_user.first_name)
+            if ok:
+                return await message.answer(txt, reply_markup=sub_active_kb(), parse_mode="Markdown")
+            else:
+                return await message.answer(txt, reply_markup=main_menu_kb(message.from_user.id), parse_mode="Markdown")
+        elif param == "admin":
+            register_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
+            if is_admin(message.from_user.id):
+                return await message.answer("👑 **Панель Создателя Welwes VPN:**", reply_markup=admin_kb(), parse_mode="Markdown")
+
+    register_user(message.from_user.id, message.from_user.username, message.from_user.first_name, ref_id)
+
+    # In Raketa VPN style: clean banner with buttons directly attached:
+    if os.path.exists(BANNER_PATH):
+        try:
+            photo = FSInputFile(BANNER_PATH)
+            await message.answer_photo(photo, reply_markup=main_menu_kb(message.from_user.id))
+            return
+        except Exception as e:
+            logging.error(f"Error sending banner: {e}")
+
+    await message.answer(f"⚡ **Добро пожаловать в {BRAND_NAME}!**", reply_markup=main_menu_kb(message.from_user.id), parse_mode="Markdown")
+
+@dp.message(Command("admin"))
+@dp.message(F.text.lower().in_(["админ", "админка", "панель", "admin", "панель создателя", "панель администратора"]))
+async def cmd_admin(message: Message, state: FSMContext):
+    parts = message.text.split()
+    if len(parts) > 1 and parts[1] == SECRET_ADMIN_KEY:
+        make_admin(message.from_user.id)
+        await message.answer("👑 **Поздравляю, Создатель! Права администратора успешно активированы!**", reply_markup=admin_kb(), parse_mode="Markdown")
+    elif is_admin(message.from_user.id):
+        await message.answer("👑 **Панель Создателя Welwes VPN:**", reply_markup=admin_kb(), parse_mode="Markdown")
+    else:
+        await message.answer("🔒 Введите пароль администратора в формате:\n`/admin welwes2026`", parse_mode="Markdown")
+
+@dp.message(F.text.lower().in_(["/trial", "пробный период", "пробник", "тест", "активировать пробный период", "активировать пробник", "бесплатный тест"]))
+async def cmd_trial_text(message: Message):
+    ok, txt = await do_activate_trial(message.from_user.id, message.from_user.username, message.from_user.first_name)
+    if ok:
+        await message.answer(txt, reply_markup=sub_active_kb(), parse_mode="Markdown")
+    else:
+        await message.answer(txt, reply_markup=main_menu_kb(message.from_user.id), parse_mode="Markdown")
+
+@dp.message(F.web_app_data)
+async def handle_webapp_data(message: Message, state: FSMContext):
+    data = message.web_app_data.data
+    action = data
+    try:
+        import json
+        payload = json.loads(data)
+        if isinstance(payload, dict):
+            action = payload.get("action", data)
+    except Exception:
+        pass
+
+    if action == "activate_trial":
+        ok, txt = await do_activate_trial(message.from_user.id, message.from_user.username, message.from_user.first_name)
+        if ok:
+            await message.answer(txt, reply_markup=sub_active_kb(), parse_mode="Markdown")
+        else:
+            await message.answer(txt, reply_markup=main_menu_kb(message.from_user.id), parse_mode="Markdown")
+    elif action == "admin_self_sub":
+        if is_admin(message.from_user.id):
+            new_sub, _ = set_sub(message.from_user.id, 100)
+            dt = datetime.fromtimestamp(new_sub).strftime("%d.%m.%Y в %H:%M")
+            await message.answer(f"👑 **Вечный VPN продлён на +100 дней!**\nДействует до: `{dt}`", reply_markup=admin_kb(), parse_mode="Markdown")
+
+@dp.callback_query(F.data == "back_main")
+async def cb_back_main(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    await state.clear()
+    if os.path.exists(BANNER_PATH):
+        photo = FSInputFile(BANNER_PATH)
+        await call.message.answer_photo(photo, reply_markup=main_menu_kb(call.from_user.id))
+    else:
+        await call.message.answer(f"⚡ **Главное меню {BRAND_NAME}:**", reply_markup=main_menu_kb(call.from_user.id), parse_mode="Markdown")
+
+# --- TRIAL ---
+@dp.callback_query(F.data == "get_trial")
+async def cb_get_trial(call: CallbackQuery):
+    await call.answer()
+    ok, txt = await do_activate_trial(call.from_user.id, call.from_user.username, call.from_user.first_name)
+    if ok:
+        await call.message.answer(txt, reply_markup=sub_active_kb(), parse_mode="Markdown")
+    else:
+        await call.message.answer(txt, reply_markup=main_menu_kb(call.from_user.id), parse_mode="Markdown")
 
 # --- MY KEYS / SUBSCRIPTION ---
 @dp.callback_query(F.data.in_(["my_keys", "my_sub"]))
@@ -1183,6 +1250,180 @@ async def process_broadcast(message: Message, state: FSMContext):
 
     await message.answer(f"✅ **Рассылка успешно завершена!**\nСообщение доставлено **{sent_count}** пользователям.", reply_markup=admin_kb(), parse_mode="Markdown")
 
+# --- ADMIN GIVE / TAKE SUBSCRIPTION ---
+@dp.callback_query(F.data == "admin_give_sub_prompt")
+async def cb_admin_give_sub_prompt(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    if not is_admin(call.from_user.id):
+        return
+    await state.set_state(Form.waiting_for_give_sub_user)
+    text = (
+        "👑 **Выдача подписки пользователю:**\n\n"
+        "Отправьте **ID пользователя** (например: `123456789`) или его **@username** ответным сообщением:\n\n"
+        "*(Или используйте быструю команду: `/give_sub ID ДНЕЙ`)*"
+    )
+    await call.message.answer(text, reply_markup=back_kb(), parse_mode="Markdown")
+
+@dp.message(Form.waiting_for_give_sub_user)
+async def process_give_sub_user(message: Message, state: FSMContext):
+    target_raw = message.text.strip().lstrip("@")
+    target_id = None
+    if target_raw.isdigit():
+        target_id = int(target_raw)
+    else:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT user_id FROM users WHERE LOWER(username) = LOWER(?)", (target_raw,))
+        row = c.fetchone()
+        conn.close()
+        if row:
+            target_id = row[0]
+
+    if not target_id:
+        await message.answer("❌ Пользователь с таким ID/юзернеймом не найден в базе бота! Попробуйте снова ввести ID:", reply_markup=back_kb())
+        return
+
+    await state.update_data(target_id=target_id)
+    await state.set_state(Form.waiting_for_give_sub_days)
+    await message.answer(f"👤 Пользователь найден: `ID: {target_id}`\n\nТеперь введите **количество дней подписки** (например: `30`):", reply_markup=back_kb(), parse_mode="Markdown")
+
+@dp.message(Form.waiting_for_give_sub_days)
+async def process_give_sub_days(message: Message, state: FSMContext):
+    data = await state.get_data()
+    target_id = data.get("target_id")
+    await state.clear()
+    try:
+        days = float(message.text.strip())
+    except ValueError:
+        await message.answer("❌ Введите число дней цифрами!", reply_markup=admin_kb())
+        return
+
+    new_sub, _ = set_sub(target_id, days)
+    dt = datetime.fromtimestamp(new_sub).strftime("%d.%m.%Y %H:%M")
+
+    try:
+        await bot.send_message(
+            target_id,
+            f"🎉 **Вам начислена подписка Welwes VPN на {int(days) if days.is_integer() else days} дн.!**\n"
+            f"📅 Действует до: `{dt}`\n\n"
+            f"🔑 Ваши ключи и подписка в разделе **«🔑 Мои ключи»**!",
+            parse_mode="Markdown"
+        )
+    except Exception:
+        pass
+
+    await message.answer(
+        f"✅ **Подписка успешно выдана!**\n\n"
+        f"👤 Пользователь: `{target_id}`\n"
+        f"⏳ Добавлено: **{days} дн.**\n"
+        f"📅 Действует до: `{dt}`",
+        reply_markup=admin_kb(),
+        parse_mode="Markdown"
+    )
+
+@dp.message(Command("give_sub"))
+@dp.message(Command("выдать"))
+async def cmd_give_sub_direct(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.split()
+    if len(parts) < 3:
+        await message.answer("ℹ️ Использование: `/give_sub ID_ИЛИ_ЮЗЕР ДНЕЙ`\nПример: `/give_sub 8297844640 30` или `/give_sub @username 30`", parse_mode="Markdown")
+        return
+    target_raw = parts[1].strip().lstrip("@")
+    try:
+        days = float(parts[2].strip())
+    except ValueError:
+        await message.answer("❌ Количество дней должно быть числом!")
+        return
+
+    target_id = None
+    if target_raw.isdigit():
+        target_id = int(target_raw)
+    else:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT user_id FROM users WHERE LOWER(username) = LOWER(?)", (target_raw,))
+        row = c.fetchone()
+        conn.close()
+        if row:
+            target_id = row[0]
+
+    if not target_id:
+        await message.answer("❌ Пользователь не найден в базе бота!")
+        return
+
+    new_sub, _ = set_sub(target_id, days)
+    dt = datetime.fromtimestamp(new_sub).strftime("%d.%m.%Y %H:%M")
+
+    try:
+        await bot.send_message(
+            target_id,
+            f"🎉 **Вам начислена подписка Welwes VPN на {int(days) if days.is_integer() else days} дн.!**\n"
+            f"📅 Действует до: `{dt}`\n\n"
+            f"🔑 Ваши ключи и подписка в разделе **«🔑 Мои ключи»**!",
+            parse_mode="Markdown"
+        )
+    except Exception:
+        pass
+
+    await message.answer(f"✅ **Подписка успешно выдана!**\n👤 Пользователь: `{target_id}`\n⏳ Срок: **{days} дн.** (до `{dt}`)", parse_mode="Markdown")
+
+@dp.message(Command("take_sub"))
+@dp.message(Command("забрать"))
+async def cmd_take_sub_direct(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.split()
+    if len(parts) < 2:
+        await message.answer("ℹ️ Использование: `/take_sub ID_ИЛИ_ЮЗЕР`", parse_mode="Markdown")
+        return
+    target_raw = parts[1].strip().lstrip("@")
+    target_id = None
+    if target_raw.isdigit():
+        target_id = int(target_raw)
+    else:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT user_id FROM users WHERE LOWER(username) = LOWER(?)", (target_raw,))
+        row = c.fetchone()
+        conn.close()
+        if row:
+            target_id = row[0]
+
+    if not target_id:
+        await message.answer("❌ Пользователь не найден в базе!")
+        return
+
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE users SET sub_until = 0 WHERE user_id = ?", (target_id,))
+    conn.commit()
+    conn.close()
+
+    await message.answer(f"🚫 **Подписка пользователя `{target_id}` аннулирована.**", parse_mode="Markdown")
+
+# --- ADMIN DB DOWNLOAD ---
+@dp.callback_query(F.data == "admin_get_db")
+@dp.message(Command("get_db"))
+@dp.message(Command("db"))
+@dp.message(Command("база"))
+async def cb_admin_get_db(event: Message | CallbackQuery):
+    uid = event.from_user.id
+    if not is_admin(uid):
+        return
+    if isinstance(event, CallbackQuery):
+        await event.answer()
+        msg = event.message
+    else:
+        msg = event
+
+    if os.path.exists(DB_PATH):
+        db_file = FSInputFile(DB_PATH, filename=f"users_backup_{int(time.time())}.db")
+        await msg.answer_document(db_file, caption="📁 **Резервная копия базы данных Welwes VPN (users.db)**")
+    else:
+        await msg.answer("❌ Файл базы данных не найден!")
+
 # --- SBP LINK ADMIN CONFIGURATION ---
 @dp.callback_query(F.data == "admin_set_sbp")
 async def cb_admin_set_sbp(call: CallbackQuery, state: FSMContext):
@@ -1321,13 +1562,17 @@ async def process_review_submission(message: Message, state: FSMContext):
     )
 
     channel_id = get_setting("reviews_channel", "@welwes_reviews")
-    targets = [channel_id, "@welwes_reviews", -1004445549692]
+    targets = [channel_id, "@welwes_reviews"]
     for target in targets:
         try:
-            if photo_id:
-                await bot.send_photo(chat_id=target, photo=photo_id, caption=caption_html, parse_mode="HTML")
+            if isinstance(target, str) and (target.startswith("-100") or target.isdigit() or (target.startswith("-") and target[1:].isdigit())):
+                t_id = int(target)
             else:
-                await bot.send_message(chat_id=target, text=caption_html, parse_mode="HTML")
+                t_id = target
+            if photo_id:
+                await bot.send_photo(chat_id=t_id, photo=photo_id, caption=caption_html, parse_mode="HTML")
+            else:
+                await bot.send_message(chat_id=t_id, text=caption_html, parse_mode="HTML")
             break
         except Exception as e:
             logging.error(f"Failed sending review to {target}: {e}")
@@ -1389,6 +1634,134 @@ async def cmd_set_reviews_channel(message: Message):
         ch = "@" + ch
     set_setting("reviews_channel", ch)
     await message.answer(f"✅ **Канал для отзывов успешно установлен:** `{ch}`\n\n*Убедитесь, что бот @{BOT_USERNAME} добавлен в этот канал как администратор с правом публикации!*", parse_mode="Markdown")
+
+# ----------------- BIND REVIEWS GROUP / CHANNEL HANDLERS -----------------
+def extract_forward_chat(message: Message):
+    if message.forward_from_chat:
+        return message.forward_from_chat
+    if hasattr(message, "forward_origin") and message.forward_origin:
+        origin = message.forward_origin
+        if hasattr(origin, "chat") and origin.chat:
+            return origin.chat
+    return None
+
+@dp.message(Command("bind_reviews", "set_reviews", "reviews_here", "bind"))
+@dp.message(F.text.lower().in_(["/bind_reviews", "/set_reviews", "/привязать_отзывы", "привязать отзывы", "отзывы сюда", "/bind"]))
+async def cmd_bind_reviews(message: Message):
+    if message.chat.type in ("group", "supergroup"):
+        is_bot_adm = is_admin(message.from_user.id)
+        is_chat_adm = False
+        try:
+            m = await bot.get_chat_member(message.chat.id, message.from_user.id)
+            if m.status in ("creator", "administrator"):
+                is_chat_adm = True
+        except Exception:
+            pass
+
+        if not (is_bot_adm or is_chat_adm):
+            await message.reply("⛔️ Команда привязки доступна только администраторам группы!")
+            return
+
+        cid_str = str(message.chat.id)
+        title = message.chat.title or "Группа отзывов"
+        set_setting("reviews_channel", cid_str)
+        set_setting("reviews_channel_title", title)
+
+        if message.chat.username:
+            set_setting("reviews_channel_link", f"https://t.me/{message.chat.username}")
+        else:
+            try:
+                inv = await bot.create_chat_invite_link(message.chat.id)
+                if inv and inv.invite_link:
+                    set_setting("reviews_channel_link", inv.invite_link)
+            except Exception:
+                pass
+
+        await message.reply(
+            f"🎉 **Группа успешно привязана для отзывов {BRAND_NAME}!**\n\n"
+            f"📌 **Чат:** {title}\n"
+            f"🆔 **ID:** `{cid_str}`\n\n"
+            f"Все новые отзывы клиентов теперь будут автоматически отправляться в этот чат! 🚀\n"
+            f"*(Убедитесь, что у бота @{BOT_USERNAME} есть право отправлять сообщения и фото)*",
+            parse_mode="Markdown"
+        )
+    elif message.chat.type == "private":
+        if not is_admin(message.from_user.id):
+            return
+        await message.reply(
+            f"💡 **Как легко привязать группу или канал для отзывов:**\n\n"
+            f"🔹 **Если это группа (чат):**\n"
+            f"1. Добавьте бота @{BOT_USERNAME} в группу с отзывами.\n"
+            f"2. Прямо в этой группе напишите команду: `/bind_reviews`\n\n"
+            f"🔹 **Если это канал:**\n"
+            f"1. Добавьте бота @{BOT_USERNAME} в канал администратором.\n"
+            f"2. Просто **перешлите (Forward)** любой пост из вашего канала сюда в диалог с ботом!",
+            parse_mode="Markdown"
+        )
+
+@dp.channel_post(Command("bind_reviews", "set_reviews", "bind"))
+@dp.channel_post(F.text.lower().in_(["/bind_reviews", "/set_reviews", "/привязать_отзывы", "привязать отзывы", "/bind"]))
+async def channel_post_bind_reviews(message: Message):
+    cid_str = str(message.chat.id)
+    title = message.chat.title or "Канал отзывов"
+    set_setting("reviews_channel", cid_str)
+    set_setting("reviews_channel_title", title)
+
+    if message.chat.username:
+        set_setting("reviews_channel_link", f"https://t.me/{message.chat.username}")
+    else:
+        try:
+            inv = await bot.create_chat_invite_link(message.chat.id)
+            if inv and inv.invite_link:
+                set_setting("reviews_channel_link", inv.invite_link)
+        except Exception:
+            pass
+
+    try:
+        await message.edit_text(
+            f"✅ **Канал успешно привязан для публикации отзывов {BRAND_NAME}!**\n\n"
+            f"📌 **Канал:** {title}\n"
+            f"🆔 **ID:** `{cid_str}`\n\n"
+            f"*(Этот сервисный пост можно удалить)*",
+            parse_mode="Markdown"
+        )
+    except Exception:
+        await message.reply(
+            f"✅ **Канал успешно привязан для публикации отзывов {BRAND_NAME}!**\n"
+            f"🆔 **ID:** `{cid_str}`",
+            parse_mode="Markdown"
+        )
+
+# Forward any message from channel to bot in PM to bind channel
+@dp.message(F.chat.type == "private", F.forward_from_chat)
+async def process_forwarded_for_reviews(message: Message, state: FSMContext):
+    f_chat = extract_forward_chat(message)
+    if f_chat and is_admin(message.from_user.id):
+        cid_str = str(f_chat.id)
+        title = f_chat.title or "Канал отзывов"
+
+        set_setting("reviews_channel", cid_str)
+        set_setting("reviews_channel_title", title)
+        if f_chat.username:
+            set_setting("reviews_channel_link", f"https://t.me/{f_chat.username}")
+        else:
+            try:
+                inv = await bot.create_chat_invite_link(f_chat.id)
+                if inv and inv.invite_link:
+                    set_setting("reviews_channel_link", inv.invite_link)
+            except Exception:
+                pass
+
+        await state.clear()
+        await message.answer(
+            f"🎉 **Канал успешно привязан для отзывов {BRAND_NAME}!**\n\n"
+            f"📢 **Канал:** {title}\n"
+            f"🆔 **ID:** `{cid_str}`\n\n"
+            f"Все новые отзывы клиентов теперь будут автоматически отправляться в этот канал! 🚀\n"
+            f"*(Убедитесь, что бот @{BOT_USERNAME} добавлен в него как администратор с правом публикации сообщений)*",
+            reply_markup=admin_kb(),
+            parse_mode="Markdown"
+        )
 
 # --- ADMIN WEBAPP URL SETTING ---
 @dp.callback_query(F.data == "admin_set_webapp")

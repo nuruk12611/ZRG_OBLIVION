@@ -458,6 +458,14 @@
         </div>
       </div>
 
+      <!-- 🎁 Активировать пробный период (виден, если тест еще не активирован) -->
+      <button class="btn btn-trial" id="btn-trial" onclick="activateTrialFromWebApp()" style="display: none; background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: #ffffff; padding: 15px 20px; border-radius: var(--radius-md); font-size: 16px; font-weight: 700; box-shadow: 0 8px 24px rgba(16, 185, 129, 0.4);">
+        <svg viewBox="0 0 24 24" style="width: 20px; height: 20px; fill: currentColor;">
+          <path d="M20 6h-2.18c.11-.31.18-.65.18-1 0-1.66-1.34-3-3-3-1.05 0-1.96.54-2.5 1.35l-.5.65-.5-.65C10.96 2.54 10.05 2 9 2 7.34 2 6 3.34 6 5c0 .35.07.69.18 1H4c-1.11 0-1.99.89-1.99 2L2 19c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2zm-5-2c.55 0 1 .45 1 1s-.45 1-1 1h-2.22l.83-1.09c.28-.36.72-.91 1.39-.91zM9 4c.67 0 1.11.55 1.39.91L11.22 6H9c-.55 0-1-.45-1-1s.45-1 1-1zm11 15H4v-2h16v2zm0-5H4V8h5.08L7 10.83 8.62 12 11 8.76l1-1.36 1 1.36 2.38 3.24L17 10.83 14.92 8H20v6z"/>
+        </svg>
+        <span>🎁 Активировать пробный период</span>
+      </button>
+
       <!-- ⚡ Купить подписку -->
       <button class="btn btn-buy" id="btn-buy" onclick="openBuyModal()">
         <svg viewBox="0 0 24 24">
@@ -477,14 +485,41 @@
         <span class="platform-badge" id="platform-badge">Windows</span>
       </button>
 
-      <!-- Row: Профиль & Поддержка -->
-      <div class="btn-row">
+      <!-- 👑 Панель Создателя (видна только администраторам) -->
+      <button class="btn btn-admin" id="btn-admin" onclick="openAdminModal()" style="display: none; background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%); color: #ffffff; padding: 13px 18px; border-radius: var(--radius-md); font-size: 15px; font-weight: 700; box-shadow: 0 6px 20px rgba(139, 92, 246, 0.35);">
+        <svg viewBox="0 0 24 24" style="width: 19px; height: 19px; fill: currentColor;">
+          <path d="M5 16L3 5l5.5 5L12 4l3.5 6L21 5l-2 11H5zm14 3c0 .55-.45 1-1 1H6c-.55 0-1-.45-1-1v-1h14v1z"/>
+        </svg>
+        <span>Панель Создателя (Админка)</span>
+      </button>
+
+      <!-- Row 1: Отзывы & Профиль -->
+      <div class="btn-row" style="grid-template-columns: 1fr 1fr; gap: 8px;">
+        <!-- ⭐️ Отзывы -->
+        <button class="btn btn-secondary" onclick="openReviewsModal()">
+          <svg viewBox="0 0 24 24">
+            <path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/>
+          </svg>
+          <span>Отзывы (5.0 ⭐)</span>
+        </button>
+
         <!-- 👤 Профиль -->
         <button class="btn btn-secondary" onclick="openProfileModal()">
           <svg viewBox="0 0 24 24">
             <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
           </svg>
           <span>Профиль</span>
+        </button>
+      </div>
+
+      <!-- Row 2: Друг (+6ч) & Поддержка -->
+      <div class="btn-row" style="grid-template-columns: 1fr 1fr; gap: 8px;">
+        <!-- 🎁 Пригласить друга -->
+        <button class="btn btn-secondary" onclick="copyReferralLink()">
+          <svg viewBox="0 0 24 24">
+            <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+          </svg>
+          <span>+6ч за Друга</span>
         </button>
 
         <!-- 👥 Поддержка -->
@@ -635,6 +670,92 @@
     </div>
   </div>
 
+  <!-- MODAL: Админ-панель -->
+  <div class="modal-overlay" id="modal-admin" onclick="closeModalOnBg(event, 'modal-admin')">
+    <div class="modal-sheet">
+      <div class="modal-handle"></div>
+      <div class="modal-header">
+        <div class="modal-title">👑 Панель Создателя WelwesVPN</div>
+        <button class="modal-close" onclick="closeModal('modal-admin')">✕</button>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:12px; margin-bottom:18px;">
+        <div style="background:rgba(139,92,246,0.1); border:1px solid rgba(139,92,246,0.3); padding:14px 16px; border-radius:14px;">
+          <div style="font-size:13px; font-weight:700; color:#c4b5fd; margin-bottom:8px;">📊 Статистика сервиса:</div>
+          <div style="font-size:14px; line-height:1.6; color:#f1f5f9;">
+            • Всего пользователей: <b id="stat-total-users">В базе</b><br>
+            • Активных серверов: <b>3 (DE, FI, US)</b><br>
+            • Сеть: <b>100 Mbit/s Reality VLESS</b>
+          </div>
+        </div>
+
+        <button class="btn btn-secondary" style="background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%); padding:13px;" onclick="adminSelfSub()">
+          ♾️ Выдать себе вечный VPN (+100 дн)
+        </button>
+
+        <button class="btn btn-secondary" style="padding:13px;" onclick="openBotCommand('admin')">
+          👑 Открыть полную админку в боте
+        </button>
+
+        <button class="btn btn-secondary" style="padding:13px;" onclick="openBotCommand('broadcast')">
+          📢 Создать рассылку клиентам
+        </button>
+
+        <button class="btn btn-secondary" style="padding:13px;" onclick="openBotCommand('set_sbp')">
+          🔗 Настроить ссылку СБП
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Отзывы -->
+  <div class="modal-overlay" id="modal-reviews" onclick="closeModalOnBg(event, 'modal-reviews')">
+    <div class="modal-sheet">
+      <div class="modal-handle"></div>
+      <div class="modal-header">
+        <div class="modal-title">⭐️ Отзывы клиентов WelwesVPN</div>
+        <button class="modal-close" onclick="closeModal('modal-reviews')">✕</button>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:12px; margin-bottom:18px;">
+        <div style="background:rgba(230,74,25,0.08); border:1px solid rgba(230,74,25,0.25); padding:14px 16px; border-radius:14px; text-align:center;">
+          <div style="font-size:24px; font-weight:800; color:#ff7043;">⭐️ 5.0 / 5.0</div>
+          <div style="font-size:13px; color:#cbd5e1; margin-top:4px;">Более 500+ довольных пользователей и геймеров</div>
+          <div style="font-size:12px; color:#10b981; font-weight:600; margin-top:6px;">🎁 Оставьте отзыв и получите до +12 часов в подарок!</div>
+        </div>
+
+        <!-- Sample Reviews -->
+        <div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); padding:12px 14px; border-radius:12px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <b style="font-size:14px; color:#f1f5f9;">@alex_gamer</b>
+            <span style="color:#f59e0b; font-size:13px;">⭐️⭐️⭐️⭐️⭐️</span>
+          </div>
+          <div style="font-size:13px; color:#94a3b8; line-height:1.4;">
+            «В Discord и играх пинг 20мс! YouTube в 4K 60FPS моментально грузит без буферизации. Лучший VPN на VLESS.»
+          </div>
+        </div>
+
+        <div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); padding:12px 14px; border-radius:12px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <b style="font-size:14px; color:#f1f5f9;">@dmitry_v</b>
+            <span style="color:#f59e0b; font-size:13px;">⭐️⭐️⭐️⭐️⭐️</span>
+          </div>
+          <div style="font-size:13px; color:#94a3b8; line-height:1.4;">
+            «Подключил на телефон и ноутбук по одной ссылке подписки. Скорость 100 Мбит/с держит стабильно!»
+          </div>
+        </div>
+
+        <button class="btn btn-buy" style="padding:14px;" onclick="openBotCommand('leave_review')">
+          ✍️ Оставить отзыв (Бонус до +12ч 🎁)
+        </button>
+
+        <button class="btn btn-secondary" style="padding:12px;" onclick="openReviewsChannel()">
+          📢 Читать отзывы в канале Telegram ↗
+        </button>
+      </div>
+    </div>
+  </div>
+
   <script>
     const SUB_URL = "http://fi4.h1cloud.net:26104/sub/a6272d65-ea37-4285-ad0c-ce1b7f305b2b";
     const TBANK_SBP_URL = "https://t.tb.ru/pm_short/ca4bNE9P31";
@@ -674,6 +795,8 @@
       const urlParams = new URLSearchParams(window.location.search);
       const subTimestamp = urlParams.get('sub');
       const isTrial = urlParams.get('trial');
+      const trialUsed = urlParams.get('trial_used');
+      const isAdmin = urlParams.get('admin');
       const userId = urlParams.get('id');
       const userName = urlParams.get('name');
 
@@ -684,23 +807,34 @@
         document.getElementById("user-display").textContent = userName;
       }
 
+      // Check Admin Privileges
+      if (isAdmin === "1" || (tg && tg.initDataUnsafe && tg.initDataUnsafe.user && tg.initDataUnsafe.user.id === 8297844640)) {
+        const adminBtn = document.getElementById("btn-admin");
+        if (adminBtn) adminBtn.style.display = "flex";
+      }
+
       const now = Math.floor(Date.now() / 1000);
       let targetTime = subTimestamp ? parseInt(subTimestamp) : null;
 
+      const btnTrial = document.getElementById("btn-trial");
+
       if (!targetTime || targetTime <= now) {
-        // Default presentation or expired
-        if (targetTime && targetTime <= now) {
+        // Expired or never activated
+        if (trialUsed === "1" || (targetTime && targetTime <= now)) {
           document.getElementById("sub-date").textContent = "Подписка истекла";
           document.getElementById("sub-status-text").textContent = "не активна";
           document.getElementById("status-dot").style.background = "#ef4444";
           document.getElementById("status-dot").style.boxShadow = "0 0 10px #ef4444";
           document.getElementById("buy-btn-text").textContent = "Продлить подписку";
+          if (btnTrial) btnTrial.style.display = "none";
         } else {
-          // Default demonstration
-          const d = new Date(Date.now() + 24 * 3600 * 1000);
-          document.getElementById("sub-date").textContent = `до: ${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
-          document.getElementById("sub-status-text").textContent = "пробный период";
+          // Free trial available!
+          document.getElementById("sub-date").textContent = "Тестовый доступ";
+          document.getElementById("sub-status-text").textContent = "доступен бесплатный тест";
+          document.getElementById("status-dot").style.background = "#10b981";
+          document.getElementById("status-dot").style.boxShadow = "0 0 10px #10b981";
           document.getElementById("buy-btn-text").textContent = "Купить подписку";
+          if (btnTrial) btnTrial.style.display = "flex";
         }
       } else {
         const d = new Date(targetTime * 1000);
@@ -708,7 +842,35 @@
         document.getElementById("sub-status-text").textContent = isTrial === "1" ? "пробный период" : "подписка активна";
         document.getElementById("status-dot").classList.add("active");
         document.getElementById("buy-btn-text").textContent = "Продлить подписку";
+        if (btnTrial) btnTrial.style.display = "none";
       }
+    }
+
+    function activateTrialFromWebApp() {
+      haptic("success");
+      
+      // Update UI immediately
+      const d = new Date(Date.now() + 6 * 3600 * 1000);
+      document.getElementById("sub-date").textContent = `до: ${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()} ${d.getHours()}:${(d.getMinutes()<10?'0':'')+d.getMinutes()}`;
+      document.getElementById("sub-status-text").textContent = "пробный период (активен)";
+      document.getElementById("status-dot").classList.add("active");
+      document.getElementById("status-dot").style.background = "#10b981";
+      document.getElementById("status-dot").style.boxShadow = "0 0 10px #10b981";
+      document.getElementById("btn-trial").style.display = "none";
+
+      showToast("🎉 Пробный период на 6 часов активирован!");
+
+      if (tg) {
+        try {
+          tg.sendData(JSON.stringify({ action: "activate_trial" }));
+        } catch (e) {
+          tg.openTelegramLink("https://t.me/WelwesVPN_bot?start=trial");
+        }
+      }
+
+      setTimeout(() => {
+        openSetupModal();
+      }, 1000);
     }
 
     function haptic(type = "medium") {
@@ -741,6 +903,46 @@
     function openProfileModal() {
       haptic("light");
       document.getElementById("modal-profile").classList.add("open");
+    }
+
+    function openReviewsModal() {
+      haptic("medium");
+      document.getElementById("modal-reviews").classList.add("open");
+    }
+
+    function openReviewsChannel() {
+      haptic("medium");
+      if (tg) {
+        tg.openTelegramLink("https://t.me/welwes_reviews");
+      } else {
+        window.open("https://t.me/welwes_reviews", "_blank");
+      }
+    }
+
+    function openAdminModal() {
+      haptic("medium");
+      document.getElementById("modal-admin").classList.add("open");
+    }
+
+    function adminSelfSub() {
+      haptic("success");
+      showToast("👑 Продлено на +100 дней!");
+      if (tg) {
+        try {
+          tg.sendData(JSON.stringify({ action: "admin_self_sub" }));
+        } catch (e) {
+          tg.openTelegramLink("https://t.me/WelwesVPN_bot?start=admin");
+        }
+      }
+    }
+
+    function openBotCommand(cmd) {
+      haptic("medium");
+      if (tg) {
+        tg.openTelegramLink(`https://t.me/WelwesVPN_bot?start=${cmd}`);
+      } else {
+        window.open(`https://t.me/WelwesVPN_bot?start=${cmd}`, "_blank");
+      }
     }
 
     function closeModal(id) {
