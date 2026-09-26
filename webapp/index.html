@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>WelwesVPN</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-color: #0b0c10;
+      --card-bg: rgba(22, 25, 34, 0.94);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --primary-gradient: linear-gradient(135deg, #e64a19 0%, #f4511e 100%);
+      --primary-hover: linear-gradient(135deg, #d84315 0%, #e64a19 100%);
+      --primary-shadow: 0 8px 24px rgba(230, 74, 25, 0.4);
+      --sec-btn: linear-gradient(135deg, #bf360c 0%, #d84315 100%);
+      --text-white: #ffffff;
+      --text-muted: #9ca3af;
+      --text-sub: #ff7043;
+      --radius-lg: 26px;
+      --radius-md: 18px;
+      --radius-sm: 12px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg-color);
+      color: var(--text-white);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-end;
+      padding: 16px;
+      overflow-x: hidden;
+      position: relative;
+    }
+
+    /* Ambient carbon mesh background */
+    body::before {
+      content: "";
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: 
+        radial-gradient(circle at 50% 20%, rgba(230, 74, 25, 0.15) 0%, transparent 60%),
+        radial-gradient(circle at 80% 80%, rgba(244, 81, 30, 0.08) 0%, transparent 50%),
+        repeating-linear-gradient(45deg, rgba(255,255,255,0.015) 0px, rgba(255,255,255,0.015) 2px, transparent 2px, transparent 8px);
+      z-index: 0;
+      pointer-events: none;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 380px;
+      position: relative;
+      z-index: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      margin-bottom: 8px;
+    }
+
+    /* Main Action Card (Nitroo-style) */
+    .vpn-card {
+      background: var(--card-bg);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius-lg);
+      padding: 24px 20px 20px;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.7);
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* Status Section */
+    .status-section {
+      margin-bottom: 6px;
+    }
+
+    .status-date {
+      font-size: 21px;
+      font-weight: 700;
+      letter-spacing: -0.4px;
+      color: var(--text-white);
+      line-height: 1.25;
+    }
+
+    .status-badge {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-sub);
+      margin-top: 4px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      background: #ff7043;
+      border-radius: 50%;
+      box-shadow: 0 0 10px #ff7043;
+      display: inline-block;
+      animation: pulse 2s infinite;
+    }
+
+    .status-dot.active {
+      background: #4caf50;
+      box-shadow: 0 0 10px #4caf50;
+    }
+
+    @keyframes pulse {
+      0% { transform: scale(0.9); opacity: 0.7; }
+      50% { transform: scale(1.2); opacity: 1; }
+      100% { transform: scale(0.9); opacity: 0.7; }
+    }
+
+    /* Buttons */
+    .btn {
+      border: none;
+      outline: none;
+      cursor: pointer;
+      font-family: inherit;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+      width: 100%;
+    }
+
+    .btn:active {
+      transform: scale(0.97);
+    }
+
+    /* Primary Buy Button */
+    .btn-buy {
+      background: var(--primary-gradient);
+      color: #ffffff;
+      padding: 16px 20px;
+      border-radius: var(--radius-md);
+      font-size: 17px;
+      font-weight: 700;
+      box-shadow: var(--primary-shadow);
+      letter-spacing: -0.2px;
+    }
+
+    .btn-buy:active {
+      background: var(--primary-hover);
+    }
+
+    .btn-buy svg {
+      width: 20px;
+      height: 20px;
+      fill: currentColor;
+    }
+
+    /* Setup Button */
+    .btn-setup {
+      background: var(--sec-btn);
+      color: #ffffff;
+      padding: 15px 18px;
+      border-radius: var(--radius-md);
+      font-size: 15px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      box-shadow: 0 6px 18px rgba(191, 54, 12, 0.35);
+    }
+
+    .btn-setup-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .power-icon {
+      width: 22px;
+      height: 22px;
+      stroke: currentColor;
+      stroke-width: 2.2;
+      fill: none;
+    }
+
+    .platform-badge {
+      font-size: 13px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.75);
+      background: rgba(0, 0, 0, 0.2);
+      padding: 4px 10px;
+      border-radius: 8px;
+    }
+
+    /* Grid Row (Profile & Support) */
+    .btn-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .btn-secondary {
+      background: var(--primary-gradient);
+      color: #ffffff;
+      padding: 13px 12px;
+      border-radius: var(--radius-sm);
+      font-size: 14.5px;
+      font-weight: 700;
+      box-shadow: 0 4px 14px rgba(230, 74, 25, 0.3);
+    }
+
+    .btn-secondary svg {
+      width: 17px;
+      height: 17px;
+      fill: currentColor;
+    }
+
+    /* Bottom Bot Tag */
+    .bot-tag {
+      text-align: center;
+      color: #64748b;
+      font-size: 12.5px;
+      font-weight: 500;
+      letter-spacing: 0.2px;
+      margin-top: 4px;
+    }
+
+    /* Toast Notification */
+    .toast {
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%) translateY(-100px);
+      background: rgba(30, 34, 45, 0.95);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #ffffff;
+      padding: 12px 20px;
+      border-radius: 14px;
+      font-size: 14px;
+      font-weight: 600;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      z-index: 999;
+      opacity: 0;
+      transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+      pointer-events: none;
+    }
+
+    .toast.show {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+    }
+
+    /* Modal Sheet */
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      z-index: 100;
+      opacity: 0;
+      visibility: hidden;
+      transition: all 0.25s ease;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+    }
+
+    .modal-overlay.open {
+      opacity: 1;
+      visibility: visible;
+    }
+
+    .modal-sheet {
+      width: 100%;
+      max-width: 440px;
+      background: #151821;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 28px 28px 0 0;
+      padding: 24px 20px 32px;
+      transform: translateY(100%);
+      transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      max-height: 85vh;
+      overflow-y: auto;
+    }
+
+    .modal-overlay.open .modal-sheet {
+      transform: translateY(0);
+    }
+
+    .modal-handle {
+      width: 40px;
+      height: 4px;
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 4px;
+      margin: 0 auto 18px;
+    }
+
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 18px;
+    }
+
+    .modal-title {
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .modal-close {
+      background: rgba(255, 255, 255, 0.08);
+      border: none;
+      color: #94a3b8;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+    }
+
+    /* Tariffs in Modal */
+    .tariff-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+
+    .tariff-card {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 14px;
+      padding: 14px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .tariff-card:hover, .tariff-card.selected {
+      border-color: #ff5722;
+      background: rgba(230, 74, 25, 0.08);
+    }
+
+    .tariff-info {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .tariff-name {
+      font-size: 15px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .tariff-tag {
+      background: #e64a19;
+      color: white;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 6px;
+    }
+
+    .tariff-price {
+      font-size: 16px;
+      font-weight: 700;
+      color: #ff7043;
+    }
+
+    /* Sub key box */
+    .key-box {
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px dashed rgba(255, 255, 255, 0.15);
+      border-radius: 12px;
+      padding: 12px;
+      font-family: monospace;
+      font-size: 12px;
+      color: #cbd5e1;
+      word-break: break-all;
+      max-height: 80px;
+      overflow-y: auto;
+      margin: 12px 0;
+    }
+
+    .instruction-step {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      margin-bottom: 14px;
+    }
+
+    .step-num {
+      width: 26px;
+      height: 26px;
+      background: #e64a19;
+      color: white;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+
+    .step-text {
+      font-size: 14px;
+      line-height: 1.4;
+      color: #cbd5e1;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Toast -->
+  <div id="toast" class="toast">
+    <span id="toast-text">Ссылка скопирована!</span>
+  </div>
+
+  <div class="container">
+    <!-- Main VPN Card (Exact NitrooVPN Layout) -->
+    <div class="vpn-card">
+      
+      <!-- Subscription Expiry & Status -->
+      <div class="status-section">
+        <div class="status-date" id="sub-date">до: 25 сентября 2026</div>
+        <div class="status-badge" id="sub-badge">
+          <span class="status-dot" id="status-dot"></span>
+          <span id="sub-status-text">пробный период</span>
+        </div>
+      </div>
+
+      <!-- ⚡ Купить подписку -->
+      <button class="btn btn-buy" id="btn-buy" onclick="openBuyModal()">
+        <svg viewBox="0 0 24 24">
+          <path d="M7 2v11h3v9l7-12h-4l4-8z"/>
+        </svg>
+        <span id="buy-btn-text">Купить подписку</span>
+      </button>
+
+      <!-- ⏻ Установка и настройка [Windows / Android / iOS] -->
+      <button class="btn btn-setup" id="btn-setup" onclick="openSetupModal()">
+        <div class="btn-setup-left">
+          <svg class="power-icon" viewBox="0 0 24 24">
+            <path d="M18.36 6.64a9 9 0 1 1-12.73 0M12 2v10"/>
+          </svg>
+          <span>Установка и настройка</span>
+        </div>
+        <span class="platform-badge" id="platform-badge">Windows</span>
+      </button>
+
+      <!-- Row: Профиль & Поддержка -->
+      <div class="btn-row">
+        <!-- 👤 Профиль -->
+        <button class="btn btn-secondary" onclick="openProfileModal()">
+          <svg viewBox="0 0 24 24">
+            <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+          </svg>
+          <span>Профиль</span>
+        </button>
+
+        <!-- 👥 Поддержка -->
+        <button class="btn btn-secondary" onclick="openSupport()">
+          <svg viewBox="0 0 24 24">
+            <path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/>
+          </svg>
+          <span>Поддержка</span>
+        </button>
+      </div>
+
+    </div>
+
+    <!-- Bot Tag -->
+    <div class="bot-tag">@WelwesVPN_bot</div>
+  </div>
+
+  <!-- MODAL: Купить подписку -->
+  <div class="modal-overlay" id="modal-buy" onclick="closeModalOnBg(event, 'modal-buy')">
+    <div class="modal-sheet">
+      <div class="modal-handle"></div>
+      <div class="modal-header">
+        <div class="modal-title">⚡ Выбор тарифа WelwesVPN</div>
+        <button class="modal-close" onclick="closeModal('modal-buy')">✕</button>
+      </div>
+      
+      <div class="tariff-list">
+        <div class="tariff-card" onclick="selectTariff('1d', 15)">
+          <div class="tariff-info">
+            <div class="tariff-name">1 день</div>
+            <div style="font-size:12px; color:#94a3b8;">Быстрый тест на 24 часа</div>
+          </div>
+          <div class="tariff-price">15 ₽</div>
+        </div>
+
+        <div class="tariff-card" onclick="selectTariff('7d', 39)">
+          <div class="tariff-info">
+            <div class="tariff-name">7 дней (Неделя)</div>
+            <div style="font-size:12px; color:#94a3b8;">Полноценный доступ</div>
+          </div>
+          <div class="tariff-price">39 ₽</div>
+        </div>
+
+        <div class="tariff-card selected" onclick="selectTariff('30d', 99)">
+          <div class="tariff-info">
+            <div class="tariff-name">30 дней <span class="tariff-tag">ХИТ</span></div>
+            <div style="font-size:12px; color:#94a3b8;">По промокоду: 54 ₽</div>
+          </div>
+          <div class="tariff-price">99 ₽</div>
+        </div>
+
+        <div class="tariff-card" onclick="selectTariff('90d', 249)">
+          <div class="tariff-info">
+            <div class="tariff-name">90 дней (3 месяца)</div>
+            <div style="font-size:12px; color:#94a3b8;">Экономия 15%</div>
+          </div>
+          <div class="tariff-price">249 ₽</div>
+        </div>
+
+        <div class="tariff-card" onclick="selectTariff('365d', 799)">
+          <div class="tariff-info">
+            <div class="tariff-name">365 дней (1 Год)</div>
+            <div style="font-size:12px; color:#94a3b8;">Всего 66 ₽ в месяц!</div>
+          </div>
+          <div class="tariff-price">799 ₽</div>
+        </div>
+      </div>
+
+      <button class="btn btn-buy" onclick="payViaTBank()">
+        <span>Оплатить через СБП / Т-Банк</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- MODAL: Установка и настройка -->
+  <div class="modal-overlay" id="modal-setup" onclick="closeModalOnBg(event, 'modal-setup')">
+    <div class="modal-sheet">
+      <div class="modal-handle"></div>
+      <div class="modal-header">
+        <div class="modal-title">⏻ Установка и подключение</div>
+        <button class="modal-close" onclick="closeModal('modal-setup')">✕</button>
+      </div>
+
+      <div class="instruction-step">
+        <div class="step-num">1</div>
+        <div class="step-text">
+          <b>Скопируйте вашу ссылку подписки:</b>
+          <div class="key-box" id="sub-url-box">http://fi4.h1cloud.net:26104/sub/a6272d65-ea37-4285-ad0c-ce1b7f305b2b</div>
+          <button class="btn btn-buy" style="padding:10px 14px; font-size:13.5px;" onclick="copySubUrl()">
+            📋 Скопировать ссылку подписки
+          </button>
+        </div>
+      </div>
+
+      <div class="instruction-step">
+        <div class="step-num">2</div>
+        <div class="step-text">
+          <b>Установите приложение:</b>
+          <div style="margin-top:6px; font-size:13px; color:#94a3b8;">
+            • <b>Windows:</b> Happ или v2rayN<br>
+            • <b>Android:</b> v2rayNG или Hiddify<br>
+            • <b>iOS (iPhone):</b> V2Box или Streisand
+          </div>
+        </div>
+      </div>
+
+      <div class="instruction-step">
+        <div class="step-num">3</div>
+        <div class="step-text">
+          Вставьте ссылку в приложение через раздел <b>«Подписки / Subscriptions»</b> и нажмите <b>«Подключиться»</b>!
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Профиль -->
+  <div class="modal-overlay" id="modal-profile" onclick="closeModalOnBg(event, 'modal-profile')">
+    <div class="modal-sheet">
+      <div class="modal-handle"></div>
+      <div class="modal-header">
+        <div class="modal-title">👤 Мой Профиль WelwesVPN</div>
+        <button class="modal-close" onclick="closeModal('modal-profile')">✕</button>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:12px; margin-bottom:18px;">
+        <div style="background:rgba(255,255,255,0.03); padding:12px 16px; border-radius:12px; border:1px solid rgba(255,255,255,0.06);">
+          <div style="font-size:12px; color:#94a3b8;">Пользователь:</div>
+          <div style="font-size:15px; font-weight:700;" id="user-display">Telegram User</div>
+        </div>
+
+        <div style="background:rgba(255,255,255,0.03); padding:12px 16px; border-radius:12px; border:1px solid rgba(255,255,255,0.06);">
+          <div style="font-size:12px; color:#94a3b8;">Доступные локации (Безлимит 100M):</div>
+          <div style="font-size:14px; font-weight:600; margin-top:4px;">
+            🇩🇪 Германия · YouTube 4K<br>
+            🇫🇮 Финляндия · Игры & Discord (20ms)<br>
+            🇺🇸 США · ChatGPT & Стриминг
+          </div>
+        </div>
+
+        <div style="background:rgba(255,255,255,0.03); padding:12px 16px; border-radius:12px; border:1px solid rgba(255,255,255,0.06);">
+          <div style="font-size:12px; color:#94a3b8;">Партнерская программа:</div>
+          <div style="font-size:14px; font-weight:600;">Получайте +6 часов за каждого друга!</div>
+          <button class="btn btn-secondary" style="margin-top:10px; padding:8px 12px; font-size:13px;" onclick="copyReferralLink()">
+            🔗 Скопировать ссылку для друзей
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const SUB_URL = "http://fi4.h1cloud.net:26104/sub/a6272d65-ea37-4285-ad0c-ce1b7f305b2b";
+    const TBANK_SBP_URL = "https://t.tb.ru/pm_short/ca4bNE9P31";
+    const SUPPORT_URL = "https://t.me/welwesvpn";
+
+    let tg = window.Telegram ? window.Telegram.WebApp : null;
+
+    // Initialize WebApp
+    if (tg) {
+      try {
+        tg.ready();
+        tg.expand();
+        tg.headerColor = '#0b0c10';
+        tg.backgroundColor = '#0b0c10';
+      } catch (e) {}
+    }
+
+    // Auto-detect OS
+    function detectPlatform() {
+      const userAgent = navigator.userAgent || navigator.vendor || window.opera;
+      if (/android/i.test(userAgent)) return "Android";
+      if (/iPad|iPhone|iPod/.test(userAgent) && !window.MSStream) return "iOS";
+      if (/Mac/i.test(userAgent)) return "macOS";
+      return "Windows";
+    }
+
+    // Date formatting in Russian
+    const months = [
+      "января", "февраля", "марта", "апреля", "мая", "июня",
+      "июля", "августа", "сентября", "октября", "ноября", "декабря"
+    ];
+
+    function initUserData() {
+      const platform = detectPlatform();
+      document.getElementById("platform-badge").textContent = platform;
+
+      const urlParams = new URLSearchParams(window.location.search);
+      const subTimestamp = urlParams.get('sub');
+      const isTrial = urlParams.get('trial');
+      const userId = urlParams.get('id');
+      const userName = urlParams.get('name');
+
+      if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
+        const u = tg.initDataUnsafe.user;
+        document.getElementById("user-display").textContent = (u.first_name || "") + " " + (u.last_name || "") + " (@" + (u.username || u.id) + ")";
+      } else if (userName) {
+        document.getElementById("user-display").textContent = userName;
+      }
+
+      const now = Math.floor(Date.now() / 1000);
+      let targetTime = subTimestamp ? parseInt(subTimestamp) : null;
+
+      if (!targetTime || targetTime <= now) {
+        // Default presentation or expired
+        if (targetTime && targetTime <= now) {
+          document.getElementById("sub-date").textContent = "Подписка истекла";
+          document.getElementById("sub-status-text").textContent = "не активна";
+          document.getElementById("status-dot").style.background = "#ef4444";
+          document.getElementById("status-dot").style.boxShadow = "0 0 10px #ef4444";
+          document.getElementById("buy-btn-text").textContent = "Продлить подписку";
+        } else {
+          // Default demonstration
+          const d = new Date(Date.now() + 24 * 3600 * 1000);
+          document.getElementById("sub-date").textContent = `до: ${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
+          document.getElementById("sub-status-text").textContent = "пробный период";
+          document.getElementById("buy-btn-text").textContent = "Купить подписку";
+        }
+      } else {
+        const d = new Date(targetTime * 1000);
+        document.getElementById("sub-date").textContent = `до: ${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
+        document.getElementById("sub-status-text").textContent = isTrial === "1" ? "пробный период" : "подписка активна";
+        document.getElementById("status-dot").classList.add("active");
+        document.getElementById("buy-btn-text").textContent = "Продлить подписку";
+      }
+    }
+
+    function haptic(type = "medium") {
+      if (tg && tg.HapticFeedback) {
+        try {
+          tg.HapticFeedback.impactOccurred(type);
+        } catch (e) {}
+      }
+    }
+
+    function showToast(text) {
+      const toast = document.getElementById("toast");
+      document.getElementById("toast-text").textContent = text;
+      toast.classList.add("show");
+      setTimeout(() => {
+        toast.classList.remove("show");
+      }, 2500);
+    }
+
+    function openBuyModal() {
+      haptic("medium");
+      document.getElementById("modal-buy").classList.add("open");
+    }
+
+    function openSetupModal() {
+      haptic("medium");
+      document.getElementById("modal-setup").classList.add("open");
+    }
+
+    function openProfileModal() {
+      haptic("light");
+      document.getElementById("modal-profile").classList.add("open");
+    }
+
+    function closeModal(id) {
+      haptic("light");
+      document.getElementById(id).classList.remove("open");
+    }
+
+    function closeModalOnBg(e, id) {
+      if (e.target.id === id) {
+        closeModal(id);
+      }
+    }
+
+    function selectTariff(id, price) {
+      haptic("selection");
+      document.querySelectorAll(".tariff-card").forEach(c => c.classList.remove("selected"));
+      event.currentTarget.classList.add("selected");
+    }
+
+    function payViaTBank() {
+      haptic("heavy");
+      if (tg) {
+        tg.openLink(TBANK_SBP_URL);
+      } else {
+        window.open(TBANK_SBP_URL, "_blank");
+      }
+    }
+
+    function copySubUrl() {
+      haptic("success");
+      navigator.clipboard.writeText(SUB_URL).then(() => {
+        showToast("✅ Ссылка подписки скопирована!");
+      });
+    }
+
+    function copyReferralLink() {
+      haptic("success");
+      const uid = (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) ? tg.initDataUnsafe.user.id : "ref";
+      const link = `https://t.me/WelwesVPN_bot?start=ref_${uid}`;
+      navigator.clipboard.writeText(link).then(() => {
+        showToast("✅ Реферальная ссылка скопирована!");
+      });
+    }
+
+    function openSupport() {
+      haptic("medium");
+      if (tg) {
+        tg.openTelegramLink(SUPPORT_URL);
+      } else {
+        window.open(SUPPORT_URL, "_blank");
+      }
+    }
+
+    initUserData();
+  </script>
+</body>
+</html>

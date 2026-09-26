@@ -13,6 +13,7 @@ import os
 import socket
 import base64
 import random
+import html
 from datetime import datetime
 
 import aiohttp
@@ -35,7 +36,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 
 # ----------------- CONFIG -----------------
-BOT_TOKEN = "8654262772:AAE25u8FCFM2--qwQwa8vaXVTQQiRJ2sGZw"
+BOT_TOKEN = "8654262772:AAF8hmQSpSZuP-mlr6KUNTGtjoLs6MseXaA"
 BOT_USERNAME = "WelwesVPN_bot"
 BRAND_NAME = "WelwesVPN"
 SUPPORT_USERNAME = "welwesvpn"
@@ -323,7 +324,7 @@ def redeem_promocode(code: str, user_id: int):
     new_sub, _ = set_sub(user_id, days)
     return days, "ok"
 
-DEFAULT_SBP_LINK = "https://www.tbank-online.com/rm/r_DxGqSWQmhe.LyaUAcktKx/RGo2I67940"
+DEFAULT_SBP_LINK = "https://t.tb.ru/pm_short/ca4bNE9P31"
 
 def get_setting(key: str, default: str = "") -> str:
     conn = sqlite3.connect(DB_PATH)
@@ -384,6 +385,7 @@ class Form(StatesGroup):
     waiting_for_reviews_channel = State()
     waiting_for_review_rating = State()
     waiting_for_review_text = State()
+    waiting_for_webapp_url = State()
 
 # ----------------- KEYBOARDS -----------------
 def main_menu_kb(user_id: int):
@@ -392,8 +394,15 @@ def main_menu_kb(user_id: int):
     has_sub = user and user[5] > now
     trial_used = user and user[4] == 1
     admin = is_admin(user_id)
+    webapp_url = get_setting("webapp_url", "")
 
     kb = []
+    if webapp_url:
+        sub_time = user[5] if user else 0
+        trial_flag = 1 if (user and user[4] == 1) else 0
+        u_url = f"{webapp_url}?sub={sub_time}&trial={trial_flag}&id={user_id}"
+        kb.append([InlineKeyboardButton(text="⚡ Открыть WelwesVPN (App)", web_app=types.WebAppInfo(url=u_url))])
+
     if not has_sub and not trial_used:
         kb.append([InlineKeyboardButton(text="🎁 Попробовать бесплатно (6 часов)", callback_data="get_trial")])
 
@@ -471,17 +480,22 @@ def buy_tariffs_kb(user_id: int):
     kb.append([InlineKeyboardButton(text="◀️ Назад в меню", callback_data="back_main")])
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
-def choose_payment_method_kb(user_id: int, tid: str):
+def choose_payment_method_kb(user_id: int, tid: str, order_id: str = ""):
     user = get_user(user_id)
     is_disc = bool(user and user[8] == 1)
     rub, stars, _ = get_tariff_prices(tid, is_disc)
     t = BASE_TARIFFS[tid]
+    sbp_url = get_setting("sbp_link", DEFAULT_SBP_LINK)
 
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"⭐ Оплатить Звёздами ({stars} ⭐ в 1 клик)", callback_data=f"pay_stars_{tid}")],
-        [InlineKeyboardButton(text=f"💳 Оплатить картой / СБП ({rub} ₽)", callback_data=f"pay_card_{tid}")],
-        [InlineKeyboardButton(text="◀️ Назад к тарифам", callback_data="buy_menu")]
-    ])
+    buttons = [
+        [InlineKeyboardButton(text="💳 Т-Pay/Банковская карта", url=sbp_url)],
+        [InlineKeyboardButton(text="💳 СБП", url=sbp_url)],
+        [InlineKeyboardButton(text="⚡ Я оплатил (Проверить перевод)", callback_data=f"check_card_{order_id}")],
+        [InlineKeyboardButton(text=f"⭐ Оплатить Звёздами ({stars} ⭐)", callback_data=f"pay_stars_{tid}")],
+        [InlineKeyboardButton(text="✏️ Промокод", callback_data="enter_promo")],
+        [InlineKeyboardButton(text="🔄 Назад", callback_data="buy_menu")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def back_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -496,6 +510,7 @@ def admin_kb():
         [InlineKeyboardButton(text="🔗 Настроить ссылку СБП для оплаты", callback_data="admin_set_sbp")],
         [InlineKeyboardButton(text="🖼️ Получить официальную Аву бота", callback_data="admin_get_avatar")],
         [InlineKeyboardButton(text="🎟️ Создать промокод для FunPay", callback_data="admin_gen_promo")],
+        [InlineKeyboardButton(text="🌐 Настроить Telegram Mini App (Web App)", callback_data="admin_set_webapp")],
         [InlineKeyboardButton(text="📊 Статистика пользователей", callback_data="admin_stats")],
         [InlineKeyboardButton(text="📢 Рассылка всем пользователям", callback_data="admin_broadcast_prompt")],
         [InlineKeyboardButton(text="◀️ Выйти в меню", callback_data="back_main")]
@@ -711,18 +726,16 @@ async def cb_choose_tariff(call: CallbackQuery):
     is_disc = bool(user and user[8] == 1)
     rub, stars, has_disc = get_tariff_prices(tid, is_disc)
 
-    disc_note = f"\n🏷️ *Скидка 45% по промокоду WELWES45 учтена!* (Экономия {t['price_rub'] - rub} ₽)" if has_disc else ""
+    order_id = f"W{int(time.time()) % 1000000}"
+    create_card_order(order_id, call.from_user.id, tid, t["days"], rub)
 
     text = (
-        f"💎 **Тариф: {t['name']}**\n\n"
-        f"• Стоимость в рублях: **{rub} ₽**\n"
-        f"• Стоимость в звёздах: **{stars} ⭐**{disc_note}\n\n"
-        f"🌍 Полный доступ ко всем локациям: 🇩🇪 Германия + 🇫🇮 Финляндия\n"
-        f"⚡ 100 Mbit/s, YouTube 4K 60FPS, Discord, игры с пингом 20ms\n"
-        f"🤖 **Ключ выдаётся БОТОМ АВТОМАТИЧЕСКИ сразу после оплаты!**\n\n"
-        f"👇 **Выберите способ оплаты:**"
+        f"💳 **Выберите способ оплаты**\n\n"
+        f"📅 **Тариф:** {t['name']}\n"
+        f"💰 **Сумма:** {rub}.00 ₽\n\n"
+        f"_Нажимая кнопку «Перейти к оплате», вы подтверждаете, что ознакомились и согласны с условиями прописанными в Документации проекта._"
     )
-    await call.message.answer(text, reply_markup=choose_payment_method_kb(call.from_user.id, tid), parse_mode="Markdown")
+    await call.message.answer(text, reply_markup=choose_payment_method_kb(call.from_user.id, tid, order_id), parse_mode="Markdown")
 
 # --- STARS AUTOMATED PAYMENT ---
 @dp.callback_query(F.data.startswith("pay_stars_"))
@@ -840,12 +853,7 @@ async def cb_pay_card(call: CallbackQuery):
         [InlineKeyboardButton(text=f"⭐ Оплатить Звёздами моментально ({stars} ⭐)", callback_data=f"pay_stars_{tid}")],
         [InlineKeyboardButton(text="◀️ Назад к тарифам", callback_data="buy_menu")]
     ])
-    cancel_kb = types.ReplyKeyboardMarkup(
-        keyboard=[[types.KeyboardButton(text="🔴 Отменить оплату")]],
-        resize_keyboard=True
-    )
     await call.message.answer(text, reply_markup=kb, parse_mode="Markdown")
-    await call.message.answer("Если передумали, нажмите кнопку отмены ниже 👇", reply_markup=cancel_kb)
 
 @dp.callback_query(F.data.startswith("check_card_"))
 async def cb_check_card_payment(call: CallbackQuery):
@@ -1216,6 +1224,15 @@ async def cb_reviews_menu(call: CallbackQuery):
 @dp.callback_query(F.data == "leave_review")
 async def cb_leave_review(call: CallbackQuery, state: FSMContext):
     await call.answer()
+    if has_user_reviewed(call.from_user.id):
+        await call.message.answer(
+            "❌ **Вы уже оставляли отзыв о нашем сервисе!**\n\n"
+            "Каждый пользователь может оставить отзыв только 1 раз. Спасибо за вашу поддержку!",
+            reply_markup=main_menu_kb(call.from_user.id),
+            parse_mode="Markdown"
+        )
+        return
+
     user = get_user(call.from_user.id)
     now = int(time.time())
     if not user or (user[5] <= now and user[4] == 0):
@@ -1256,6 +1273,10 @@ async def process_review_submission(message: Message, state: FSMContext):
     rating = data.get("rating", 5)
     await state.clear()
 
+    if has_user_reviewed(message.from_user.id):
+        await message.answer("❌ **Вы уже оставляли отзыв ранее!**\nОставить отзыв можно только один раз.", reply_markup=main_menu_kb(message.from_user.id), parse_mode="Markdown")
+        return
+
     review_text = message.caption if message.photo else message.text
     if not review_text:
         review_text = "Отличный сервис, скорость супер!"
@@ -1273,40 +1294,42 @@ async def process_review_submission(message: Message, state: FSMContext):
 
     username_str = f"@{message.from_user.username}" if message.from_user.username else (message.from_user.first_name or "Клиент Welwes VPN")
 
-    # Anti-abuse check: was bonus already granted to this user before?
-    already_reviewed = has_user_reviewed(message.from_user.id)
+    # Anti-abuse: random hours between 1 and 12, granted only once
     random_hours = random.randint(1, 12)
     bonus_fraction_days = round(random_hours / 24, 4)
 
     # Save to database
     add_review(message.from_user.id, username_str, rating, review_text, photo_id, tariff_name)
 
-    # Reward user if first review
-    if not already_reviewed:
-        set_sub(message.from_user.id, bonus_fraction_days)
-        bonus_note = f"🎁 Вам начислено **+{random_hours} ч.** бесплатной подписки в подарок!"
-    else:
-        bonus_note = "ℹ️ Вы уже получали подарочный бонус за первый отзыв. Ваш новый отзыв сохранён!"
+    # Reward user (+1 to +12 hours)
+    set_sub(message.from_user.id, bonus_fraction_days)
+    bonus_note = f"🎁 Вам начислено **+{random_hours} ч.** бесплатной подписки в подарок!"
 
-    # Send to reviews channel
-    channel_id = get_setting("reviews_channel", "@welwes_reviews")
+    # Send to reviews channel using safe HTML format and fallbacks
     stars_str = "⭐️" * rating
-    caption = (
-        f"{stars_str} **Новый отзыв о {BRAND_NAME}!**\n\n"
-        f"👤 **Клиент:** {username_str}\n"
-        f"💳 **Тариф:** `{tariff_name}`\n"
-        f"⭐ **Оценка:** {rating} из 5 ({stars_str})\n\n"
-        f"💬 **Отзыв:**\n«{review_text}»\n\n"
-        f"🚀 **Подключить {BRAND_NAME}:** @{BOT_USERNAME}"
+    safe_user = html.escape(username_str)
+    safe_tariff = html.escape(tariff_name)
+    safe_text = html.escape(review_text)
+    caption_html = (
+        f"{stars_str} <b>Новый отзыв о {BRAND_NAME}!</b>\n\n"
+        f"👤 <b>Клиент:</b> {safe_user}\n"
+        f"💳 <b>Тариф:</b> <code>{safe_tariff}</code>\n"
+        f"⭐ <b>Оценка:</b> {rating} из 5 ({stars_str})\n\n"
+        f"💬 <b>Отзыв:</b>\n«{safe_text}»\n\n"
+        f"🚀 <b>Подключить {BRAND_NAME}:</b> @{BOT_USERNAME}"
     )
 
-    try:
-        if photo_id:
-            await bot.send_photo(chat_id=channel_id, photo=photo_id, caption=caption, parse_mode="Markdown")
-        else:
-            await bot.send_message(chat_id=channel_id, text=caption, parse_mode="Markdown")
-    except Exception as e:
-        logging.warning(f"Could not send review to channel {channel_id}: {e}")
+    channel_id = get_setting("reviews_channel", "@welwes_reviews")
+    targets = [channel_id, "@welwes_reviews", -1004445549692]
+    for target in targets:
+        try:
+            if photo_id:
+                await bot.send_photo(chat_id=target, photo=photo_id, caption=caption_html, parse_mode="HTML")
+            else:
+                await bot.send_message(chat_id=target, text=caption_html, parse_mode="HTML")
+            break
+        except Exception as e:
+            logging.error(f"Failed sending review to {target}: {e}")
 
     # Notify admins
     admins = get_all_admins()
@@ -1366,6 +1389,72 @@ async def cmd_set_reviews_channel(message: Message):
     set_setting("reviews_channel", ch)
     await message.answer(f"✅ **Канал для отзывов успешно установлен:** `{ch}`\n\n*Убедитесь, что бот @{BOT_USERNAME} добавлен в этот канал как администратор с правом публикации!*", parse_mode="Markdown")
 
+# --- ADMIN WEBAPP URL SETTING ---
+@dp.callback_query(F.data == "admin_set_webapp")
+async def cb_admin_set_webapp(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    if not is_admin(call.from_user.id):
+        return
+    current_url = get_setting("webapp_url", "не установлен")
+    await state.set_state(Form.waiting_for_webapp_url)
+    text = (
+        f"🌐 **Настройка Telegram Mini App (Web App):**\n\n"
+        f"Текущий URL: `{current_url}`\n\n"
+        f"Отправьте публичную `https://` ссылку на ваш WebApp (например, GitHub Pages, Vercel или домен) ответным сообщением:\n\n"
+        f"*(Telegram требует обязательный HTTPS протокол)*"
+    )
+    await call.message.answer(text, reply_markup=back_kb(), parse_mode="Markdown")
+
+@dp.message(Form.waiting_for_webapp_url)
+async def process_set_webapp(message: Message, state: FSMContext):
+    await state.clear()
+    url = message.text.strip()
+    if not url.startswith("https://"):
+        await message.answer("❌ URL для WebApp должен обязательно начинаться с `https://`!\nПопробуйте снова через админку.", reply_markup=admin_kb(), parse_mode="Markdown")
+        return
+    set_setting("webapp_url", url)
+    try:
+        await bot.set_chat_menu_button(
+            menu_button=types.MenuButtonWebApp(
+                text="Открыть VPN",
+                web_app=types.WebAppInfo(url=url)
+            )
+        )
+        await message.answer(f"✅ **Кнопка WebApp «Открыть VPN» и Mini App успешно подключены!**\n\nURL: `{url}`", reply_markup=admin_kb(), parse_mode="Markdown")
+    except Exception as e:
+        await message.answer(f"⚠️ URL сохранен в базу, но Telegram сообщил об ошибке: {e}", reply_markup=admin_kb(), parse_mode="Markdown")
+
+@dp.message(Command("set_webapp"))
+async def cmd_set_webapp(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        current_url = get_setting("webapp_url", "не установлен")
+        await message.answer(
+            f"ℹ️ **Управление Telegram Mini App (Web App):**\n\n"
+            f"Текущий URL: `{current_url}`\n\n"
+            f"Для установки отправьте:\n"
+            f"`/set_webapp https://ваш-домен-или-github.io/папка/`",
+            parse_mode="Markdown"
+        )
+        return
+    url = parts[1].strip()
+    if not url.startswith("https://"):
+        await message.answer("❌ URL для WebApp должен обязательно начинаться с `https://` (требование Telegram)!", parse_mode="Markdown")
+        return
+    set_setting("webapp_url", url)
+    try:
+        await bot.set_chat_menu_button(
+            menu_button=types.MenuButtonWebApp(
+                text="Открыть VPN",
+                web_app=types.WebAppInfo(url=url)
+            )
+        )
+        await message.answer(f"✅ **Кнопка «Открыть VPN» и Mini App успешно подключены!**\n\nURL: `{url}`", parse_mode="Markdown")
+    except Exception as e:
+        await message.answer(f"⚠️ URL сохранен в базу, но Telegram сообщил об ошибке: {e}", parse_mode="Markdown")
+
 # --- CANCEL PAYMENT HANDLER ---
 @dp.message(F.text == "🔴 Отменить оплату")
 async def process_cancel_payment(message: Message, state: FSMContext):
@@ -1382,6 +1471,20 @@ async def main():
     print(f"• Promo: {ACTIVE_PROMO_CODE} (-{PROMO_DISCOUNT_PERCENT}%)")
     print(f"• Friend Discount: -{FRIEND_DISCOUNT_PERCENT}% / Bonus: +{FRIEND_BONUS_HOURS}h")
     print(f"• Master Sub URL: {MASTER_SUB_URL}")
+    
+    webapp_url = get_setting("webapp_url", "")
+    if webapp_url:
+        try:
+            await bot.set_chat_menu_button(
+                menu_button=types.MenuButtonWebApp(
+                    text="Открыть VPN",
+                    web_app=types.WebAppInfo(url=webapp_url)
+                )
+            )
+            print(f"• WebApp Menu Button configured: {webapp_url}")
+        except Exception as e:
+            print(f"• Note on WebApp Menu Button: {e}")
+            
     print("=" * 60)
 
     await bot.delete_webhook(drop_pending_updates=True)
