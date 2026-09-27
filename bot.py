@@ -46,14 +46,18 @@ DB_PATH = os.path.join(BASE_DIR, "users.db")
 BANNER_PATH = os.path.join(BASE_DIR, "welwes_banner.jpg")
 AVATAR_PATH = os.path.join(BASE_DIR, "welwes_avatar.png")
 
-# Live Unified Subscription Endpoint (Germany + Finland):
+# Live Unified Subscription Endpoint (Finland + Germany + USA):
 MASTER_SUB_URL = "http://fi4.h1cloud.net:26104/sub/a6272d65-ea37-4285-ad0c-ce1b7f305b2b"
 
 # Direct VLESS strings:
-GERMANY_VLESS = "vless://a6272d65-ea37-4285-ad0c-ce1b7f305b2b@germany-d4.h1cloud.net:25133?type=tcp&security=reality&sni=dl.google.com&fp=chrome&pbk=5YzC4doB6AZ1X1EdgMgV2tQuG41fjzDynaCntp_ciw4&sid=e74dcb7a6d3cc766&spx=%2F&encryption=none#🇩🇪 Германия · YouTube 4K (100M)"
-FINLAND_VLESS = "vless://a6272d65-ea37-4285-ad0c-ce1b7f305b2b@fi4.h1cloud.net:26105?type=tcp&security=reality&sni=dl.google.com&fp=chrome&pbk=oHYPUcx0-_fhmwLQUQcWXpozqYK02fF5iPGC-7fg_iA&sid=c7017bdc272c7b2e&spx=%2F&encryption=none#🇫🇮 Финляндия · Игры & Discord (20ms)"
-USA_VLESS = "vless://a6272d65-ea37-4285-ad0c-ce1b7f305b2b@us3.h1cloud.net:25561?type=tcp&security=reality&sni=dl.google.com&fp=chrome&pbk=p63_QLlRrs-Mo4COFFiHbumCJMZLdKravPnU11N8HEA&sid=fcebf3479252cad4&spx=%2F&encryption=none#🇺🇸 США · ChatGPT & Стриминг (100M)"
+GERMANY_VLESS = "vless://a6272d65-ea37-4285-ad0c-ce1b7f305b2b@germany-d4.h1cloud.net:25133?type=tcp&security=reality&sni=germany-d4.h1cloud.net&fp=chrome&pbk=8NT7x_m01cDtQX_Eh-yF4Z30WFcu_kPQanKoFFGtZ1o&sid=deb462e28c344934&spx=%2F&encryption=none#%F0%9F%87%A9%F0%9F%87%AA%20%D0%93%D0%B5%D1%80%D0%BC%D0%B0%D0%BD%D0%B8%D1%8F"
+FINLAND_VLESS = "vless://a6272d65-ea37-4285-ad0c-ce1b7f305b2b@fi4.h1cloud.net:26105?type=tcp&security=reality&sni=fi4.h1cloud.net&fp=chrome&pbk=HrEg38WV-K4SzKKA70yVoZ5UJUZZnWR8bTiYsNEQbX4&sid=fb89e1ae6bd591ca&spx=%2F&encryption=none#%F0%9F%87%AB%F0%9F%87%AE%20%D0%A4%D0%B8%D0%BD%D0%BB%D1%8F%D0%BD%D0%B4%D0%B8%D1%8F"
+USA_VLESS = "vless://a6272d65-ea37-4285-ad0c-ce1b7f305b2b@us3.h1cloud.net:25561?type=tcp&security=reality&sni=us3.h1cloud.net&fp=chrome&pbk=p63_QLlRrs-Mo4COFFiHbumCJMZLdKravPnU11N8HEA&sid=fcebf3479252cad4&spx=%2F&encryption=none#%F0%9F%87%BA%F0%9F%87%B8%20%D0%A1%D0%A8%D0%90"
 DEFAULT_WEBAPP_URL = "https://nuruk12611.github.io/ZRG_OBLIVION/webapp/"
+
+# YooKassa Official API v3:
+DEFAULT_YOOKASSA_SHOP_ID = "1475484"
+DEFAULT_YOOKASSA_SECRET_KEY = "live_jv8SWvJnJplT22u77-vEgwQcNq7I3ry1XU-cQsxWHSg"
 
 # ----------------- TARIFFS & PROMO -----------------
 PROMO_DISCOUNT_PERCENT = 45
@@ -130,9 +134,16 @@ def init_db():
             days INTEGER,
             amount INTEGER,
             timestamp INTEGER,
-            status TEXT DEFAULT 'pending'
+            status TEXT DEFAULT 'pending',
+            payment_id TEXT DEFAULT NULL,
+            payment_url TEXT DEFAULT NULL
         )
     """)
+    for col, ctype in [("payment_id", "TEXT DEFAULT NULL"), ("payment_url", "TEXT DEFAULT NULL")]:
+        try:
+            c.execute(f"ALTER TABLE card_orders ADD COLUMN {col} {ctype}")
+        except sqlite3.OperationalError:
+            pass
     c.execute("""
         CREATE TABLE IF NOT EXISTS reviews (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -261,21 +272,30 @@ def add_stars_payment(user_id: int, amount: int, days: int):
     conn.commit()
     conn.close()
 
-def create_card_order(order_id: str, user_id: int, tariff_id: str, days: int, amount: int):
+def create_card_order(order_id: str, user_id: int, tariff_id: str, days: int, amount: int, payment_id: str = None, payment_url: str = None):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("INSERT INTO card_orders (order_id, user_id, tariff_id, days, amount, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-              (order_id, user_id, tariff_id, days, amount, int(time.time())))
+    c.execute("INSERT INTO card_orders (order_id, user_id, tariff_id, days, amount, timestamp, payment_id, payment_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+              (order_id, user_id, tariff_id, days, amount, int(time.time()), payment_id, payment_url))
     conn.commit()
     conn.close()
 
 def get_card_order(order_id: str):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT order_id, user_id, tariff_id, days, amount, timestamp, status FROM card_orders WHERE order_id = ?", (order_id,))
+    c.execute("SELECT order_id, user_id, tariff_id, days, amount, timestamp, status, payment_id, payment_url FROM card_orders WHERE order_id = ?", (order_id,))
     row = c.fetchone()
     conn.close()
     return row
+
+def get_pending_yookassa_orders():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    cutoff = int(time.time()) - 86400
+    c.execute("SELECT order_id, user_id, tariff_id, days, amount, timestamp, status, payment_id, payment_url FROM card_orders WHERE status = 'pending' AND payment_id IS NOT NULL AND timestamp > ?", (cutoff,))
+    rows = c.fetchall()
+    conn.close()
+    return rows
 
 def complete_card_order(order_id: str):
     conn = sqlite3.connect(DB_PATH)
@@ -389,6 +409,70 @@ class Form(StatesGroup):
     waiting_for_webapp_url = State()
     waiting_for_give_sub_user = State()
     waiting_for_give_sub_days = State()
+    waiting_for_yookassa_shop_id = State()
+
+# ----------------- YOOKASSA API V3 HELPERS -----------------
+async def create_yookassa_payment(amount_rub: int, description: str, order_id: str, user_id: int, days: int) -> tuple[str | None, str | None]:
+    shop_id = get_setting("yookassa_shop_id", DEFAULT_YOOKASSA_SHOP_ID).strip()
+    secret_key = get_setting("yookassa_secret_key", DEFAULT_YOOKASSA_SECRET_KEY).strip()
+    if not shop_id or not secret_key:
+        return None, None
+
+    url = "https://api.yookassa.ru/v3/payments"
+    headers = {
+        "Idempotence-Key": str(uuid.uuid4()),
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "amount": {
+            "value": f"{amount_rub:.2f}",
+            "currency": "RUB"
+        },
+        "confirmation": {
+            "type": "redirect",
+            "return_url": f"https://t.me/{BOT_USERNAME}"
+        },
+        "capture": True,
+        "description": description,
+        "metadata": {
+            "order_id": str(order_id),
+            "user_id": str(user_id),
+            "days": str(days)
+        }
+    }
+    try:
+        auth = aiohttp.BasicAuth(login=str(shop_id), password=str(secret_key))
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, headers=headers, auth=auth, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                data = await resp.json()
+                if resp.status in (200, 201) and "id" in data:
+                    conf_url = data.get("confirmation", {}).get("confirmation_url")
+                    return data["id"], conf_url
+                else:
+                    logging.error(f"YooKassa create payment error ({resp.status}): {data}")
+    except Exception as e:
+        logging.error(f"YooKassa create payment exception: {e}")
+    return None, None
+
+async def check_yookassa_payment(payment_id: str) -> str:
+    shop_id = get_setting("yookassa_shop_id", DEFAULT_YOOKASSA_SHOP_ID).strip()
+    secret_key = get_setting("yookassa_secret_key", DEFAULT_YOOKASSA_SECRET_KEY).strip()
+    if not shop_id or not secret_key or not payment_id:
+        return "unknown"
+
+    url = f"https://api.yookassa.ru/v3/payments/{payment_id}"
+    try:
+        auth = aiohttp.BasicAuth(login=str(shop_id), password=str(secret_key))
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, auth=auth, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if data.get("paid") is True or data.get("status") == "succeeded":
+                        return "succeeded"
+                    return data.get("status", "pending")
+    except Exception as e:
+        logging.error(f"YooKassa check payment exception: {e}")
+    return "unknown"
 
 # ----------------- KEYBOARDS -----------------
 def main_menu_kb(user_id: int):
@@ -493,17 +577,17 @@ def buy_tariffs_kb(user_id: int):
     kb.append([InlineKeyboardButton(text="◀️ Назад в меню", callback_data="back_main")])
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
-def choose_payment_method_kb(user_id: int, tid: str, order_id: str = ""):
+def choose_payment_method_kb(user_id: int, tid: str, order_id: str = "", pay_url: str = None):
     user = get_user(user_id)
     is_disc = bool(user and user[8] == 1)
     rub, stars, _ = get_tariff_prices(tid, is_disc)
     t = BASE_TARIFFS[tid]
-    sbp_url = get_setting("sbp_link", DEFAULT_SBP_LINK)
+    target_url = pay_url or get_setting("sbp_link", DEFAULT_SBP_LINK)
 
     buttons = [
-        [InlineKeyboardButton(text="💳 Т-Pay/Банковская карта", url=sbp_url)],
-        [InlineKeyboardButton(text="💳 СБП", url=sbp_url)],
-        [InlineKeyboardButton(text="⚡ Я оплатил (Проверить перевод)", callback_data=f"check_card_{order_id}")],
+        [InlineKeyboardButton(text=f"💳 Т-Pay / Банковская карта ({rub} ₽)", url=target_url)],
+        [InlineKeyboardButton(text=f"💳 СБП ({rub} ₽)", url=target_url)],
+        [InlineKeyboardButton(text="⚡ Я оплатил (Проверить оплату)", callback_data=f"check_card_{order_id}")],
         [InlineKeyboardButton(text=f"⭐ Оплатить Звёздами ({stars} ⭐)", callback_data=f"pay_stars_{tid}")],
         [InlineKeyboardButton(text="✏️ Промокод", callback_data="enter_promo")],
         [InlineKeyboardButton(text="🔄 Назад", callback_data="buy_menu")]
@@ -519,6 +603,7 @@ def admin_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="♾️ Выдать себе вечный VPN (100 дней)", callback_data="admin_self_sub")],
         [InlineKeyboardButton(text="👑 Выдать подписку пользователю", callback_data="admin_give_sub_prompt")],
+        [InlineKeyboardButton(text="💳 Настроить ЮKassa (ShopID)", callback_data="admin_set_yookassa")],
         [InlineKeyboardButton(text="⭐ Баланс и вывод Звёзд (Stars)", callback_data="admin_stars_balance")],
         [InlineKeyboardButton(text="📢 Настроить канал отзывов", callback_data="admin_set_reviews_ch")],
         [InlineKeyboardButton(text="🔗 Настроить ссылку СБП для оплаты", callback_data="admin_set_sbp")],
@@ -795,15 +880,18 @@ async def cb_choose_tariff(call: CallbackQuery):
     rub, stars, has_disc = get_tariff_prices(tid, is_disc)
 
     order_id = f"W{int(time.time()) % 1000000}"
-    create_card_order(order_id, call.from_user.id, tid, t["days"], rub)
+    desc = f"Подписка Welwes VPN ({t['name']}) — Заказ #{order_id}"
+    payment_id, pay_url = await create_yookassa_payment(rub, desc, order_id, call.from_user.id, t["days"])
+    create_card_order(order_id, call.from_user.id, tid, t["days"], rub, payment_id, pay_url)
 
     text = (
         f"💳 **Выберите способ оплаты**\n\n"
         f"📅 **Тариф:** {t['name']}\n"
         f"💰 **Сумма:** {rub}.00 ₽\n\n"
+        f"⚡ *После оплаты по СБП / Т-Pay / Карте подписка активируется АВТОМАТИЧЕСКИ за несколько секунд!*\n\n"
         f"_Нажимая кнопку «Перейти к оплате», вы подтверждаете, что ознакомились и согласны с условиями прописанными в Документации проекта._"
     )
-    await call.message.answer(text, reply_markup=choose_payment_method_kb(call.from_user.id, tid, order_id), parse_mode="Markdown")
+    await call.message.answer(text, reply_markup=choose_payment_method_kb(call.from_user.id, tid, order_id, pay_url), parse_mode="Markdown")
 
 # --- STARS AUTOMATED PAYMENT ---
 @dp.callback_query(F.data.startswith("pay_stars_"))
@@ -892,7 +980,59 @@ async def process_successful_payment(message: Message):
         except Exception:
             pass
 
-# --- CARD / SBP AUTOMATED CHECKOUT ---
+# --- CARD / SBP / YOOKASSA AUTOMATED CHECKOUT ---
+async def fulfill_yookassa_order(order_row) -> bool:
+    order_id = order_row[0]
+    fresh = get_card_order(order_id)
+    if not fresh or fresh[6] == "completed":
+        return False
+
+    complete_card_order(order_id)
+    target_user_id = fresh[1]
+    days = fresh[3]
+    amount = fresh[4]
+    new_sub, ref_id = set_sub(target_user_id, days)
+    expire_dt = datetime.fromtimestamp(new_sub).strftime("%d.%m.%Y в %H:%M")
+
+    if ref_id:
+        try:
+            set_sub(ref_id, 0.25)
+            await bot.send_message(ref_id, "🎉 Ваш реферал купил VPN! Вам начислено +6 часов подписки!")
+        except Exception:
+            pass
+
+    try:
+        await bot.send_message(
+            target_user_id,
+            f"🎉 **ОПЛАТА ЮKASSA УСПЕШНО ПОЛУЧЕНА!**\n\n"
+            f"✅ Вам АВТОМАТИЧЕСКИ начислено **+{days} дней** подписки {BRAND_NAME}!\n"
+            f"⏳ Подписка активна до: `{expire_dt}`\n\n"
+            f"🔗 **Ваша универсальная ссылка подписки:**\n"
+            f"`{MASTER_SUB_URL}`\n\n"
+            f"Наслаждайтесь свободным и быстрым интернетом!",
+            reply_markup=sub_active_kb(),
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logging.error(f"Error notifying user on YooKassa fulfillment: {e}")
+
+    admins = get_all_admins()
+    for a_id in admins:
+        try:
+            await bot.send_message(
+                a_id,
+                f"💰 **АВТОМАТИЧЕСКАЯ ОПЛАТА ЮKASSA (СБП / КАРТА)!**\n\n"
+                f"🧾 Заказ: `#{order_id}`\n"
+                f"🆔 Клиент ID: `{target_user_id}`\n"
+                f"💵 Сумма: **{amount} ₽**\n"
+                f"⏳ Тариф: **{days} дней**\n\n"
+                f"Ключи выданы клиенту автоматически!",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+    return True
+
 @dp.callback_query(F.data.startswith("pay_card_"))
 async def cb_pay_card(call: CallbackQuery):
     await call.answer()
@@ -906,17 +1046,19 @@ async def cb_pay_card(call: CallbackQuery):
     rub, stars, _ = get_tariff_prices(tid, is_disc)
 
     order_id = f"W{int(time.time()) % 1000000}"
-    create_card_order(order_id, call.from_user.id, tid, t["days"], rub)
+    desc = f"Подписка Welwes VPN ({t['name']}) — Заказ #{order_id}"
+    payment_id, pay_url = await create_yookassa_payment(rub, desc, order_id, call.from_user.id, t["days"])
+    create_card_order(order_id, call.from_user.id, tid, t["days"], rub, payment_id, pay_url)
 
-    sbp_url = get_setting("sbp_link", DEFAULT_SBP_LINK)
+    target_url = pay_url or get_setting("sbp_link", DEFAULT_SBP_LINK)
 
     text = (
-        f"⚙️ **Создали запрос на покупку.**\n\n"
-        f"Нажмите на кнопку: «💳 Оплатить»\n\n"
-        f"⏳ Обработка платежа занимает до 1 часа, обычно — 1-5 минут."
+        f"⚙️ **Создали счёт на оплату #{order_id}.**\n\n"
+        f"Нажмите на кнопку: «💳 Оплатить {rub} ₽»\n\n"
+        f"⚡ Выдача VPN происходит **автоматически** сразу после оплаты!"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"💳 Оплатить {rub} ₽", url=sbp_url)],
+        [InlineKeyboardButton(text=f"💳 Оплатить {rub} ₽ (СБП / Карта)", url=target_url)],
         [InlineKeyboardButton(text="⚡ Проверить оплату", callback_data=f"check_card_{order_id}")],
         [InlineKeyboardButton(text=f"⭐ Оплатить Звёздами моментально ({stars} ⭐)", callback_data=f"pay_stars_{tid}")],
         [InlineKeyboardButton(text="◀️ Назад к тарифам", callback_data="buy_menu")]
@@ -934,6 +1076,20 @@ async def cb_check_card_payment(call: CallbackQuery):
     if order[6] == "completed":
         await call.answer("Этот заказ уже был успешно оплачен и активирован!", show_alert=True)
         return
+
+    payment_id = order[7] if len(order) > 7 else None
+    if payment_id:
+        yk_status = await check_yookassa_payment(payment_id)
+        if yk_status == "succeeded":
+            await call.answer("🎉 Оплата подтверждена ЮKassa! Выдаём VPN!", show_alert=True)
+            await fulfill_yookassa_order(order)
+            return
+        elif yk_status == "canceled":
+            await call.answer("❌ Этот счёт был отменён в ЮKassa. Создайте новый заказ в меню покупки.", show_alert=True)
+            return
+        elif yk_status == "pending":
+            await call.answer("⏳ Оплата в ЮKassa ещё не завершена. Как только вы оплатите, ключи придут автоматически!", show_alert=True)
+            return
 
     await call.answer("Запрос на проверку отправлен! Ключи будут выданы сразу после подтверждения.", show_alert=True)
     await call.message.answer(
@@ -1829,6 +1985,52 @@ async def cmd_set_webapp(message: Message):
     except Exception as e:
         await message.answer(f"⚠️ URL сохранен в базу, но Telegram сообщил об ошибке: {e}", parse_mode="Markdown")
 
+# --- ADMIN YOOKASSA SHOP ID SETTING ---
+@dp.callback_query(F.data == "admin_set_yookassa")
+async def cb_admin_set_yookassa(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    if not is_admin(call.from_user.id):
+        return
+    cur_shop = get_setting("yookassa_shop_id", DEFAULT_YOOKASSA_SHOP_ID) or "не установлен"
+    cur_key = get_setting("yookassa_secret_key", DEFAULT_YOOKASSA_SECRET_KEY)
+    masked_key = f"{cur_key[:12]}...{cur_key[-6:]}" if len(cur_key) > 18 else cur_key
+    await state.set_state(Form.waiting_for_yookassa_shop_id)
+    text = (
+        f"💳 **Настройка автооплаты ЮKassa (API v3):**\n\n"
+        f"• **Секретный ключ:** `{masked_key}` (✅ подключён)\n"
+        f"• **Shop ID (Идентификатор магазина):** `{cur_shop}`\n\n"
+        f"Отправьте ваш **Shop ID** (6–7 цифр из левого верхнего угла личного кабинета ЮKassa рядом с названием магазина) ответным сообщением:"
+    )
+    await call.message.answer(text, reply_markup=back_kb(), parse_mode="Markdown")
+
+@dp.message(Form.waiting_for_yookassa_shop_id)
+async def process_set_yookassa_shop_id(message: Message, state: FSMContext):
+    await state.clear()
+    val = message.text.strip()
+    if ":" in val:
+        sid, skey = val.split(":", 1)
+        set_setting("yookassa_shop_id", sid.strip())
+        set_setting("yookassa_secret_key", skey.strip())
+    else:
+        set_setting("yookassa_shop_id", val)
+    await message.answer(
+        f"✅ **Shop ID ЮKassa (`{get_setting('yookassa_shop_id')}`) успешно сохранён!**\n\n"
+        f"Теперь все кнопки оплаты (СБП / Т-Pay / Карта) автоматически создают официальный счёт ЮKassa и выдают подписку за несколько секунд после оплаты!",
+        reply_markup=admin_kb(),
+        parse_mode="Markdown"
+    )
+
+@dp.message(Command("shopid"))
+async def cmd_set_shopid(message: Message):
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        cur_shop = get_setting("yookassa_shop_id", DEFAULT_YOOKASSA_SHOP_ID) or "не установлен"
+        await message.answer(f"💳 Текущий Shop ID ЮKassa: `{cur_shop}`\nДля установки отправьте: `/shopid 123456`", parse_mode="Markdown")
+        return
+    sid = parts[1].strip()
+    set_setting("yookassa_shop_id", sid)
+    await message.answer(f"✅ **Shop ID ЮKassa (`{sid}`) успешно установлен!** Автооплата СБП / Картой полностью активна!", parse_mode="Markdown")
+
 # --- CANCEL PAYMENT HANDLER ---
 @dp.message(F.text == "🔴 Отменить оплату")
 async def process_cancel_payment(message: Message, state: FSMContext):
@@ -1836,15 +2038,36 @@ async def process_cancel_payment(message: Message, state: FSMContext):
     await message.answer("❌ Запрос на оплату отменён.", reply_markup=types.ReplyKeyboardRemove())
     await cmd_start(message, state)
 
+async def yookassa_auto_poll_loop():
+    while True:
+        try:
+            pending = get_pending_yookassa_orders()
+            for order in pending:
+                payment_id = order[7]
+                if payment_id:
+                    status = await check_yookassa_payment(payment_id)
+                    if status == "succeeded":
+                        await fulfill_yookassa_order(order)
+                    elif status == "canceled":
+                        complete_card_order(order[0])
+        except Exception as e:
+            logging.error(f"YooKassa auto-poll error: {e}")
+        await asyncio.sleep(8)
+
 # ----------------- MAIN RUNNER -----------------
 async def main():
     init_db()
+    if not get_setting("yookassa_shop_id") and DEFAULT_YOOKASSA_SHOP_ID:
+        set_setting("yookassa_shop_id", DEFAULT_YOOKASSA_SHOP_ID)
+    if not get_setting("yookassa_secret_key") and DEFAULT_YOOKASSA_SECRET_KEY:
+        set_setting("yookassa_secret_key", DEFAULT_YOOKASSA_SECRET_KEY)
     print("=" * 60)
     print("🚀 Welwes VPN Bot starting...")
     print(f"• Brand: {BRAND_NAME}")
     print(f"• Promo: {ACTIVE_PROMO_CODE} (-{PROMO_DISCOUNT_PERCENT}%)")
     print(f"• Friend Discount: -{FRIEND_DISCOUNT_PERCENT}% / Bonus: +{FRIEND_BONUS_HOURS}h")
     print(f"• Master Sub URL: {MASTER_SUB_URL}")
+    print(f"• YooKassa ShopID: {DEFAULT_YOOKASSA_SHOP_ID} | Key: {DEFAULT_YOOKASSA_SECRET_KEY[:12]}... (active)")
     
     webapp_url = get_setting("webapp_url", DEFAULT_WEBAPP_URL)
     if webapp_url:
@@ -1861,6 +2084,7 @@ async def main():
             
     print("=" * 60)
 
+    asyncio.create_task(yookassa_auto_poll_loop())
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
