@@ -47,12 +47,12 @@ BANNER_PATH = os.path.join(BASE_DIR, "welwes_banner.jpg")
 AVATAR_PATH = os.path.join(BASE_DIR, "welwes_avatar.png")
 
 # Live Unified Subscription Endpoint (Finland + Germany + USA):
-MASTER_SUB_URL = "http://fi4.h1cloud.net:26104/sub/a6272d65-ea37-4285-ad0c-ce1b7f305b2b"
+MASTER_SUB_URL = "http://fi3.h1cloud.net:25065/sub/a6272d65-ea37-4285-ad0c-ce1b7f305b2b"
 
 # Direct VLESS strings:
-GERMANY_VLESS = "vless://a6272d65-ea37-4285-ad0c-ce1b7f305b2b@germany-d4.h1cloud.net:25133?type=tcp&security=reality&sni=germany-d4.h1cloud.net&fp=chrome&pbk=8NT7x_m01cDtQX_Eh-yF4Z30WFcu_kPQanKoFFGtZ1o&sid=deb462e28c344934&spx=%2F&encryption=none#%F0%9F%87%A9%F0%9F%87%AA%20%D0%93%D0%B5%D1%80%D0%BC%D0%B0%D0%BD%D0%B8%D1%8F"
-FINLAND_VLESS = "vless://a6272d65-ea37-4285-ad0c-ce1b7f305b2b@fi4.h1cloud.net:26105?type=tcp&security=reality&sni=fi4.h1cloud.net&fp=chrome&pbk=HrEg38WV-K4SzKKA70yVoZ5UJUZZnWR8bTiYsNEQbX4&sid=fb89e1ae6bd591ca&spx=%2F&encryption=none#%F0%9F%87%AB%F0%9F%87%AE%20%D0%A4%D0%B8%D0%BD%D0%BB%D1%8F%D0%BD%D0%B4%D0%B8%D1%8F"
-USA_VLESS = "vless://a6272d65-ea37-4285-ad0c-ce1b7f305b2b@us3.h1cloud.net:25561?type=tcp&security=reality&sni=us3.h1cloud.net&fp=chrome&pbk=p63_QLlRrs-Mo4COFFiHbumCJMZLdKravPnU11N8HEA&sid=fcebf3479252cad4&spx=%2F&encryption=none#%F0%9F%87%BA%F0%9F%87%B8%20%D0%A1%D0%A8%D0%90"
+GERMANY_VLESS = "vless://a6272d65-ea37-4285-ad0c-ce1b7f305b2b@de3.h1cloud.net:25106?type=tcp&security=reality&sni=www.apple.com&fp=chrome&pbk=i95Taq7GW4pfBfLvoKkL1jbh1nuZ3Q0cfCkDakB6bnE&sid=09c4e72b087eb51e&spx=%2F&encryption=none#%F0%9F%87%A9%F0%9F%87%AA%20%D0%93%D0%B5%D1%80%D0%BC%D0%B0%D0%BD%D0%B8%D1%8F"
+FINLAND_VLESS = "vless://a6272d65-ea37-4285-ad0c-ce1b7f305b2b@fi3.h1cloud.net:25070?type=tcp&security=reality&sni=www.apple.com&fp=chrome&pbk=908GiHu_QOIp_Czm9OhjbGjyAS754bYnYUjHq_Zqfx8&sid=42fa2089ae2dd942&spx=%2F&encryption=none#%F0%9F%87%AB%F0%9F%87%AE%20%D0%A4%D0%B8%D0%BD%D0%BB%D1%8F%D0%BD%D0%B4%D0%B8%D1%8F"
+USA_VLESS = "vless://a6272d65-ea37-4285-ad0c-ce1b7f305b2b@us3.h1cloud.net:25561?type=tcp&security=reality&sni=www.apple.com&fp=chrome&pbk=p63_QLlRrs-Mo4COFFiHbumCJMZLdKravPnU11N8HEA&sid=fcebf3479252cad4&spx=%2F&encryption=none#%F0%9F%87%BA%F0%9F%87%B8%20%D0%A1%D0%A8%D0%90"
 DEFAULT_WEBAPP_URL = "https://nuruk12611.github.io/ZRG_OBLIVION/webapp/"
 
 # YooKassa Official API v3:
