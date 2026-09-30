@@ -1,0 +1,2092 @@
+import sys
+import io
+if sys.platform == "win32":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
+import asyncio
+import logging
+import sqlite3
+import time
+import uuid
+import os
+import socket
+import base64
+import random
+import html
+from datetime import datetime
+
+import aiohttp
+from aiohttp.resolver import ThreadedResolver
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.filters import Command, CommandStart
+from aiogram.types import (
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    CallbackQuery,
+    Message,
+    FSInputFile,
+    BufferedInputFile,
+    LabeledPrice,
+    PreCheckoutQuery,
+)
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
+
+# ----------------- CONFIG -----------------
+BOT_TOKEN = "8654262772:AAF8hmQSpSZuP-mlr6KUNTGtjoLs6MseXaA"
+BOT_USERNAME = "WelwesVPN_bot"
+BRAND_NAME = "WelwesVPN"
+SUPPORT_USERNAME = "welwesvpn"
+SECRET_ADMIN_KEY = "welwes2026"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "users.db")
+BANNER_PATH = os.path.join(BASE_DIR, "welwes_banner.jpg")
+AVATAR_PATH = os.path.join(BASE_DIR, "welwes_avatar.png")
+
+# Live Unified Subscription Endpoint (Finland + Germany + USA):
+MASTER_SUB_URL = "http://fi3.h1cloud.net:25065/sub/a6272d65-ea37-4285-ad0c-ce1b7f305b2b"
+
+# Direct VLESS strings:
+GERMANY_VLESS = "vless://a6272d65-ea37-4285-ad0c-ce1b7f305b2b@de3.h1cloud.net:25106?type=tcp&security=reality&sni=www.apple.com&fp=chrome&pbk=i95Taq7GW4pfBfLvoKkL1jbh1nuZ3Q0cfCkDakB6bnE&sid=09c4e72b087eb51e&spx=%2F&encryption=none#%F0%9F%87%A9%F0%9F%87%AA%20%D0%93%D0%B5%D1%80%D0%BC%D0%B0%D0%BD%D0%B8%D1%8F"
+FINLAND_VLESS = "vless://a6272d65-ea37-4285-ad0c-ce1b7f305b2b@fi3.h1cloud.net:25070?type=tcp&security=reality&sni=www.apple.com&fp=chrome&pbk=908GiHu_QOIp_Czm9OhjbGjyAS754bYnYUjHq_Zqfx8&sid=42fa2089ae2dd942&spx=%2F&encryption=none#%F0%9F%87%AB%F0%9F%87%AE%20%D0%A4%D0%B8%D0%BD%D0%BB%D1%8F%D0%BD%D0%B4%D0%B8%D1%8F"
+USA_VLESS = "vless://a6272d65-ea37-4285-ad0c-ce1b7f305b2b@us3.h1cloud.net:25561?type=tcp&security=reality&sni=www.apple.com&fp=chrome&pbk=p63_QLlRrs-Mo4COFFiHbumCJMZLdKravPnU11N8HEA&sid=fcebf3479252cad4&spx=%2F&encryption=none#%F0%9F%87%BA%F0%9F%87%B8%20%D0%A1%D0%A8%D0%90"
+DEFAULT_WEBAPP_URL = "https://nuruk12611.github.io/ZRG_OBLIVION/webapp/"
+
+# YooKassa Official API v3:
+DEFAULT_YOOKASSA_SHOP_ID = "1475484"
+DEFAULT_YOOKASSA_SECRET_KEY = "live_jv8SWvJnJplT22u77-vEgwQcNq7I3ry1XU-cQsxWHSg"
+
+# ----------------- TARIFFS & PROMO -----------------
+PROMO_DISCOUNT_PERCENT = 45
+ACTIVE_PROMO_CODE = "WELWES45"
+
+FRIEND_DISCOUNT_PERCENT = 15
+FRIEND_BONUS_HOURS = 6
+
+BASE_TARIFFS = {
+    "1d": {"name": "1 день", "days": 1, "price_rub": 15, "stars": 10, "discountable": False},
+    "7d": {"name": "7 дней", "days": 7, "price_rub": 39, "stars": 25, "discountable": True},
+    "30d": {"name": "30 дней (Месяц)", "days": 30, "price_rub": 99, "stars": 65, "hit": True, "discountable": True},
+    "90d": {"name": "90 дней (3 месяца)", "days": 90, "price_rub": 249, "stars": 160, "discountable": True},
+    "180d": {"name": "180 дней (Полгода)", "days": 180, "price_rub": 449, "stars": 290, "discountable": True},
+    "365d": {"name": "365 дней (1 Год)", "days": 365, "price_rub": 799, "stars": 520, "discountable": True},
+}
+
+def get_tariff_prices(tid: str, is_discount_active: bool):
+    t = BASE_TARIFFS[tid]
+    if is_discount_active and t.get("discountable"):
+        disc_rub = max(1, int(round(t["price_rub"] * (100 - PROMO_DISCOUNT_PERCENT) / 100)))
+        disc_stars = max(1, int(round(t["stars"] * (100 - PROMO_DISCOUNT_PERCENT) / 100)))
+        return disc_rub, disc_stars, True
+    return t["price_rub"], t["stars"], False
+
+logging.basicConfig(level=logging.INFO)
+
+# ----------------- DATABASE -----------------
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            first_name TEXT,
+            registered_at INTEGER,
+            trial_used INTEGER DEFAULT 0,
+            sub_until INTEGER DEFAULT 0,
+            is_admin INTEGER DEFAULT 0,
+            referrer_id INTEGER DEFAULT NULL,
+            discount_active INTEGER DEFAULT 0
+        )
+    """)
+    for col, ctype in [("referrer_id", "INTEGER DEFAULT NULL"), ("discount_active", "INTEGER DEFAULT 0")]:
+        try:
+            c.execute(f"ALTER TABLE users ADD COLUMN {col} {ctype}")
+        except sqlite3.OperationalError:
+            pass
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS promocodes (
+            code TEXT PRIMARY KEY,
+            days INTEGER,
+            created_by INTEGER,
+            used_by INTEGER DEFAULT NULL,
+            used_at INTEGER DEFAULT NULL
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS stars_payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            amount INTEGER,
+            days INTEGER,
+            timestamp INTEGER
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS card_orders (
+            order_id TEXT PRIMARY KEY,
+            user_id INTEGER,
+            tariff_id TEXT,
+            days INTEGER,
+            amount INTEGER,
+            timestamp INTEGER,
+            status TEXT DEFAULT 'pending',
+            payment_id TEXT DEFAULT NULL,
+            payment_url TEXT DEFAULT NULL
+        )
+    """)
+    for col, ctype in [("payment_id", "TEXT DEFAULT NULL"), ("payment_url", "TEXT DEFAULT NULL")]:
+        try:
+            c.execute(f"ALTER TABLE card_orders ADD COLUMN {col} {ctype}")
+        except sqlite3.OperationalError:
+            pass
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS reviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            username TEXT,
+            rating INTEGER,
+            text TEXT,
+            photo_id TEXT DEFAULT NULL,
+            tariff TEXT,
+            created_at INTEGER,
+            status TEXT DEFAULT 'approved'
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def get_user(user_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT user_id, username, first_name, registered_at, trial_used, sub_until, is_admin, referrer_id, discount_active FROM users WHERE user_id = ?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    return row
+
+def register_user(user_id: int, username: str, first_name: str, referrer_id: int = None):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
+    exists = c.fetchone()
+    if not exists:
+        c.execute("""
+            INSERT INTO users (user_id, username, first_name, registered_at, trial_used, sub_until, is_admin, referrer_id, discount_active)
+            VALUES (?, ?, ?, ?, 0, 0, 0, ?, 0)
+        """, (user_id, username or "", first_name or "", int(time.time()), referrer_id))
+    conn.commit()
+    conn.close()
+
+def set_sub(user_id: int, days: float):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    now = int(time.time())
+    c.execute("SELECT sub_until, referrer_id FROM users WHERE user_id = ?", (user_id,))
+    row = c.fetchone()
+    current_sub = row[0] if row else 0
+    ref_id = row[1] if row else None
+
+    start_from = max(now, current_sub)
+    new_sub = start_from + int(days * 86400)
+    c.execute("UPDATE users SET sub_until = ? WHERE user_id = ?", (new_sub, user_id))
+    conn.commit()
+    conn.close()
+    return new_sub, ref_id
+
+def set_discount_active(user_id: int, active: int = 1):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE users SET discount_active = ? WHERE user_id = ?", (active, user_id))
+    conn.commit()
+    conn.close()
+
+def set_trial_used(user_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE users SET trial_used = 1 WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+def make_admin(user_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE users SET is_admin = 1 WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+def is_admin(user_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT is_admin FROM users WHERE user_id = ?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    return bool(row and row[0] == 1)
+
+def get_all_admins():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT user_id FROM users WHERE is_admin = 1")
+    rows = c.fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+def get_stats():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM users")
+    total_users = c.fetchone()[0]
+    now = int(time.time())
+    c.execute("SELECT COUNT(*) FROM users WHERE sub_until > ?", (now,))
+    active_subs = c.fetchone()[0]
+    conn.close()
+    return total_users, active_subs
+
+def get_referral_stats(user_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM users WHERE referrer_id = ?", (user_id,))
+    invited = c.fetchone()[0]
+    now = int(time.time())
+    c.execute("SELECT COUNT(*) FROM users WHERE referrer_id = ? AND (sub_until > ? OR trial_used = 1)", (user_id, now))
+    active_referrals = c.fetchone()[0]
+    conn.close()
+    return invited, active_referrals
+
+def get_all_user_ids():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT user_id FROM users")
+    rows = c.fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+def add_stars_payment(user_id: int, amount: int, days: int):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT INTO stars_payments (user_id, amount, days, timestamp) VALUES (?, ?, ?, ?)",
+              (user_id, amount, days, int(time.time())))
+    conn.commit()
+    conn.close()
+
+def create_card_order(order_id: str, user_id: int, tariff_id: str, days: int, amount: int, payment_id: str = None, payment_url: str = None):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT INTO card_orders (order_id, user_id, tariff_id, days, amount, timestamp, payment_id, payment_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+              (order_id, user_id, tariff_id, days, amount, int(time.time()), payment_id, payment_url))
+    conn.commit()
+    conn.close()
+
+def get_card_order(order_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT order_id, user_id, tariff_id, days, amount, timestamp, status, payment_id, payment_url FROM card_orders WHERE order_id = ?", (order_id,))
+    row = c.fetchone()
+    conn.close()
+    return row
+
+def get_pending_yookassa_orders():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    cutoff = int(time.time()) - 86400
+    c.execute("SELECT order_id, user_id, tariff_id, days, amount, timestamp, status, payment_id, payment_url FROM card_orders WHERE status = 'pending' AND payment_id IS NOT NULL AND timestamp > ?", (cutoff,))
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def complete_card_order(order_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE card_orders SET status = 'completed' WHERE order_id = ?", (order_id,))
+    conn.commit()
+    conn.close()
+
+def get_total_stars_earned():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT SUM(amount), COUNT(*) FROM stars_payments")
+    row = c.fetchone()
+    conn.close()
+    total_stars = row[0] if row and row[0] else 0
+    count_payments = row[1] if row and row[1] else 0
+    return total_stars, count_payments
+
+def create_promocode(code: str, days: int, creator_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    try:
+        c.execute("INSERT INTO promocodes (code, days, created_by) VALUES (?, ?, ?)", (code, days, creator_id))
+        conn.commit()
+        success = True
+    except sqlite3.IntegrityError:
+        success = False
+    conn.close()
+    return success
+
+def redeem_promocode(code: str, user_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT days, used_by FROM promocodes WHERE code = ?", (code,))
+    row = c.fetchone()
+    if not row:
+        conn.close()
+        return None, "invalid"
+    days, used_by = row
+    if used_by is not None:
+        conn.close()
+        return None, "already_used"
+    now = int(time.time())
+    c.execute("UPDATE promocodes SET used_by = ?, used_at = ? WHERE code = ?", (user_id, now, code))
+    conn.commit()
+    conn.close()
+    new_sub, _ = set_sub(user_id, days)
+    return days, "ok"
+
+DEFAULT_SBP_LINK = "https://t.tb.ru/pm_short/ca4bNE9P31"
+
+def get_setting(key: str, default: str = "") -> str:
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
+    c.execute("SELECT value FROM settings WHERE key = ?", (key,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row and row[0] else default
+
+def set_setting(key: str, value: str):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
+    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+    conn.commit()
+    conn.close()
+
+# ----------------- RAKETA STYLE BUNDLE FORMATTER -----------------
+def generate_sub_bundle_b64(user_id: int = 0) -> str:
+    """Generates Raketa-style dynamic configuration with info nodes & servers"""
+    lines = [
+        f"vless://00000000-0000-0000-0000-000000000000@0.0.0.0:1?encryption=none&type=tcp&security=none#⚡️ Наш бот: @{BOT_USERNAME}",
+        f"vless://00000000-0000-0000-0000-000000000000@0.0.0.0:1?encryption=none&type=tcp&security=none#💬 Поддержка: @{SUPPORT_USERNAME}",
+        FINLAND_VLESS,
+        USA_VLESS,
+        GERMANY_VLESS
+    ]
+    raw_content = "\n".join(lines) + "\n"
+    return base64.b64encode(raw_content.encode("utf-8")).decode("utf-8")
+
+# ----------------- REVIEWS DATABASE HELPERS -----------------
+def add_review(user_id: int, username: str, rating: int, text: str, photo_id: str, tariff: str):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO reviews (user_id, username, rating, text, photo_id, tariff, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (user_id, username, rating, text, photo_id, tariff, int(time.time())))
+    conn.commit()
+    conn.close()
+
+def has_user_reviewed(user_id: int) -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM reviews WHERE user_id = ?", (user_id,))
+    count = c.fetchone()[0]
+    conn.close()
+    return count > 0
+
+# ----------------- FSM STATES -----------------
+class Form(StatesGroup):
+    waiting_for_promocode = State()
+    waiting_for_support_ticket = State()
+    waiting_for_admin_reply = State()
+    waiting_for_broadcast = State()
+    waiting_for_sbp_link = State()
+    waiting_for_reviews_channel = State()
+    waiting_for_review_rating = State()
+    waiting_for_review_text = State()
+    waiting_for_webapp_url = State()
+    waiting_for_give_sub_user = State()
+    waiting_for_give_sub_days = State()
+    waiting_for_yookassa_shop_id = State()
+
+# ----------------- YOOKASSA API V3 HELPERS -----------------
+async def create_yookassa_payment(amount_rub: int, description: str, order_id: str, user_id: int, days: int) -> tuple[str | None, str | None]:
+    shop_id = get_setting("yookassa_shop_id", DEFAULT_YOOKASSA_SHOP_ID).strip()
+    secret_key = get_setting("yookassa_secret_key", DEFAULT_YOOKASSA_SECRET_KEY).strip()
+    if not shop_id or not secret_key:
+        return None, None
+
+    url = "https://api.yookassa.ru/v3/payments"
+    headers = {
+        "Idempotence-Key": str(uuid.uuid4()),
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "amount": {
+            "value": f"{amount_rub:.2f}",
+            "currency": "RUB"
+        },
+        "confirmation": {
+            "type": "redirect",
+            "return_url": f"https://t.me/{BOT_USERNAME}"
+        },
+        "capture": True,
+        "description": description,
+        "metadata": {
+            "order_id": str(order_id),
+            "user_id": str(user_id),
+            "days": str(days)
+        }
+    }
+    try:
+        auth = aiohttp.BasicAuth(login=str(shop_id), password=str(secret_key))
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, headers=headers, auth=auth, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                data = await resp.json()
+                if resp.status in (200, 201) and "id" in data:
+                    conf_url = data.get("confirmation", {}).get("confirmation_url")
+                    return data["id"], conf_url
+                else:
+                    logging.error(f"YooKassa create payment error ({resp.status}): {data}")
+    except Exception as e:
+        logging.error(f"YooKassa create payment exception: {e}")
+    return None, None
+
+async def check_yookassa_payment(payment_id: str) -> str:
+    shop_id = get_setting("yookassa_shop_id", DEFAULT_YOOKASSA_SHOP_ID).strip()
+    secret_key = get_setting("yookassa_secret_key", DEFAULT_YOOKASSA_SECRET_KEY).strip()
+    if not shop_id or not secret_key or not payment_id:
+        return "unknown"
+
+    url = f"https://api.yookassa.ru/v3/payments/{payment_id}"
+    try:
+        auth = aiohttp.BasicAuth(login=str(shop_id), password=str(secret_key))
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, auth=auth, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if data.get("paid") is True or data.get("status") == "succeeded":
+                        return "succeeded"
+                    return data.get("status", "pending")
+    except Exception as e:
+        logging.error(f"YooKassa check payment exception: {e}")
+    return "unknown"
+
+# ----------------- KEYBOARDS -----------------
+def main_menu_kb(user_id: int):
+    user = get_user(user_id)
+    now = int(time.time())
+    has_sub = user and user[5] > now
+    trial_used = user and user[4] == 1
+    admin = is_admin(user_id)
+    webapp_url = get_setting("webapp_url", DEFAULT_WEBAPP_URL)
+
+    kb = []
+    if webapp_url:
+        sub_time = user[5] if user else 0
+        trial_flag = 1 if (user and user[4] == 1 and user[5] > now) else 0
+        trial_used_flag = 1 if trial_used else 0
+        admin_flag = 1 if admin else 0
+        u_name = user[2] if (user and user[2]) else (user[1] if user else "")
+        u_url = f"{webapp_url}?sub={sub_time}&trial={trial_flag}&trial_used={trial_used_flag}&id={user_id}&admin={admin_flag}&name={html.escape(str(u_name))}"
+        kb.append([InlineKeyboardButton(text="⚡ Открыть WelwesVPN (App)", web_app=types.WebAppInfo(url=u_url))])
+
+    if not has_sub and not trial_used:
+        kb.append([InlineKeyboardButton(text="🎁 Активировать пробный период (6 часов)", callback_data="get_trial")])
+
+    # Exact layout matching user's reference screenshot + Reviews:
+    kb.append([InlineKeyboardButton(text="💳 Покупка | Продление", callback_data="buy_menu")])
+    kb.append([InlineKeyboardButton(text="🔑 Мои ключи", callback_data="my_keys")])
+    kb.append([
+        InlineKeyboardButton(text="⭐️ Отзывы", callback_data="reviews_menu"),
+        InlineKeyboardButton(text="👥 Партнёрка", callback_data="affiliate")
+    ])
+    kb.append([InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="invite_friend")])
+    kb.append([InlineKeyboardButton(text="ℹ️ Поддержка ↗", url=f"https://t.me/{SUPPORT_USERNAME}")])
+
+    if admin:
+        kb.append([InlineKeyboardButton(text="👑 Панель Создателя (Админка)", callback_data="admin_panel")])
+
+    return InlineKeyboardMarkup(inline_keyboard=kb)
+
+def reviews_menu_kb():
+    ch = get_setting("reviews_channel", "@welwes_reviews")
+    link = get_setting("reviews_channel_link", "")
+    if not link:
+        if ch.startswith("@"):
+            link = f"https://t.me/{ch.lstrip('@')}"
+        elif ch.startswith("https://t.me/"):
+            link = ch
+        else:
+            link = "https://t.me/welwes_reviews"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✍️ Оставить отзыв (Бонус 1–12ч 🎁)", callback_data="leave_review")],
+        [InlineKeyboardButton(text="📢 Читать отзывы в канале ↗", url=link)],
+        [InlineKeyboardButton(text="◀️ В главное меню", callback_data="back_main")]
+    ])
+
+def review_rating_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="⭐️ 5", callback_data="rev_rate_5"),
+            InlineKeyboardButton(text="⭐️ 4", callback_data="rev_rate_4"),
+            InlineKeyboardButton(text="⭐️ 3", callback_data="rev_rate_3"),
+            InlineKeyboardButton(text="⭐️ 2", callback_data="rev_rate_2"),
+            InlineKeyboardButton(text="⭐️ 1", callback_data="rev_rate_1")
+        ],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="back_main")]
+    ])
+
+def sub_active_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📋 Скопировать ссылку подписки", callback_data="copy_sub")],
+        [InlineKeyboardButton(text="📦 Скопировать Base64 ключ (Всё в 1)", callback_data="copy_bundle")],
+        [
+            InlineKeyboardButton(text="🇫🇮 Финляндия", callback_data="copy_fi"),
+            InlineKeyboardButton(text="🇺🇸 США", callback_data="copy_us"),
+            InlineKeyboardButton(text="🇩🇪 Германия", callback_data="copy_de")
+        ],
+        [InlineKeyboardButton(text="📁 Скачать файл подписки (.txt)", callback_data="download_sub_file")],
+        [InlineKeyboardButton(text="📖 Инструкция по подключению", callback_data="instructions")],
+        [InlineKeyboardButton(text="◀️ В главное меню", callback_data="back_main")]
+    ])
+
+def buy_tariffs_kb(user_id: int):
+    user = get_user(user_id)
+    is_disc = bool(user and user[8] == 1)
+
+    kb = []
+    if is_disc:
+        kb.append([InlineKeyboardButton(text="✅ Скидка -45% АКТИВНА (WELWES45)", callback_data="promo_already_active")])
+    else:
+        kb.append([InlineKeyboardButton(text="🔥 Активировать скидку -45% (WELWES45)", callback_data="activate_promo45")])
+
+    for tid, t in BASE_TARIFFS.items():
+        rub, stars, has_disc = get_tariff_prices(tid, is_disc)
+        hit_mark = " 🔥" if t.get("hit") else ""
+        if has_disc:
+            text = f"{t['name']} — {rub} ₽ (было ~{t['price_rub']}~) / {stars} ⭐ [-45%]{hit_mark}"
+        else:
+            text = f"{t['name']} — {rub} ₽ / {stars} ⭐{hit_mark}"
+
+        kb.append([InlineKeyboardButton(text=text, callback_data=f"tariff_{tid}")])
+
+    kb.append([InlineKeyboardButton(text="🎟️ Ввести промокод / FunPay", callback_data="enter_promo")])
+    kb.append([InlineKeyboardButton(text="◀️ Назад в меню", callback_data="back_main")])
+    return InlineKeyboardMarkup(inline_keyboard=kb)
+
+def choose_payment_method_kb(user_id: int, tid: str, order_id: str = "", pay_url: str = None):
+    user = get_user(user_id)
+    is_disc = bool(user and user[8] == 1)
+    rub, stars, _ = get_tariff_prices(tid, is_disc)
+    t = BASE_TARIFFS[tid]
+    target_url = pay_url or get_setting("sbp_link", DEFAULT_SBP_LINK)
+
+    buttons = [
+        [InlineKeyboardButton(text=f"💳 Т-Pay / Банковская карта ({rub} ₽)", url=target_url)],
+        [InlineKeyboardButton(text=f"💳 СБП ({rub} ₽)", url=target_url)],
+        [InlineKeyboardButton(text="⚡ Я оплатил (Проверить оплату)", callback_data=f"check_card_{order_id}")],
+        [InlineKeyboardButton(text=f"⭐ Оплатить Звёздами ({stars} ⭐)", callback_data=f"pay_stars_{tid}")],
+        [InlineKeyboardButton(text="✏️ Промокод", callback_data="enter_promo")],
+        [InlineKeyboardButton(text="🔄 Назад", callback_data="buy_menu")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def back_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀️ Назад в меню", callback_data="back_main")]
+    ])
+
+def admin_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="♾️ Выдать себе вечный VPN (100 дней)", callback_data="admin_self_sub")],
+        [InlineKeyboardButton(text="👑 Выдать подписку пользователю", callback_data="admin_give_sub_prompt")],
+        [InlineKeyboardButton(text="💳 Настроить ЮKassa (ShopID)", callback_data="admin_set_yookassa")],
+        [InlineKeyboardButton(text="⭐ Баланс и вывод Звёзд (Stars)", callback_data="admin_stars_balance")],
+        [InlineKeyboardButton(text="📢 Настроить канал отзывов", callback_data="admin_set_reviews_ch")],
+        [InlineKeyboardButton(text="🔗 Настроить ссылку СБП для оплаты", callback_data="admin_set_sbp")],
+        [InlineKeyboardButton(text="🖼️ Получить официальную Аву бота", callback_data="admin_get_avatar")],
+        [InlineKeyboardButton(text="🎟️ Создать промокод для FunPay", callback_data="admin_gen_promo")],
+        [InlineKeyboardButton(text="🌐 Настроить Telegram Mini App (Web App)", callback_data="admin_set_webapp")],
+        [InlineKeyboardButton(text="📊 Статистика пользователей", callback_data="admin_stats")],
+        [InlineKeyboardButton(text="📢 Рассылка всем пользователям", callback_data="admin_broadcast_prompt")],
+        [InlineKeyboardButton(text="📁 Скачать базу users.db", callback_data="admin_get_db")],
+        [InlineKeyboardButton(text="◀️ Выйти в меню", callback_data="back_main")]
+    ])
+
+# ----------------- BOT SETUP -----------------
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher(storage=MemoryStorage())
+
+# ----------------- TRIAL HELPER -----------------
+async def do_activate_trial(user_id: int, username: str = "", first_name: str = "") -> tuple[bool, str]:
+    user = get_user(user_id)
+    if not user:
+        register_user(user_id, username, first_name)
+        user = get_user(user_id)
+    
+    if user[4] == 1:
+        return False, "❌ **Вы уже использовали бесплатный пробный период!**"
+
+    _, ref_id = set_sub(user_id, 0.25) # 6 hours = 0.25 days
+    set_trial_used(user_id)
+
+    # Reward referrer if exists (+6 hours):
+    if ref_id:
+        try:
+            set_sub(ref_id, 0.25)
+            await bot.send_message(
+                ref_id,
+                f"🎉 **Ваш друг {first_name or user_id} активировал Welwes VPN!**\nВам начислено **+6 часов** бесплатной подписки в подарок!",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+
+    text = (
+        f"🎉 **Вам выдан бесплатный тест на 6 часов!**\n\n"
+        f"🔗 **Ваша универсальная ссылка-подписка:**\n"
+        f"`{MASTER_SUB_URL}`\n\n"
+        f"📱 **Как подключить за 1 минуту:**\n"
+        f"1. Скопируйте ссылку выше (нажмите на неё).\n"
+        f"2. Откройте приложение **Happ** (или Hiddify / Streisand).\n"
+        f"3. Нажмите **«+» → Добавить подписку** и вставьте ссылку!\n"
+        f"4. Серверы **Финляндия**, **США** и **Германия** добавятся автоматически!\n\n"
+        f"💡 *Совет: если в Happ пишет 'u/a' или нет доступа к сети, в настройках Happ (DNS) выберите DoH (Cloudflare 1.1.1.1).* "
+    )
+    return True, text
+
+# ----------------- HANDLERS -----------------
+@dp.message(CommandStart())
+async def cmd_start(message: Message, state: FSMContext):
+    await state.clear()
+    
+    # Check referral or deep action start:
+    ref_id = None
+    args = message.text.split(maxsplit=1)
+    if len(args) > 1:
+        param = args[1].strip()
+        if param.startswith("ref_"):
+            try:
+                potential_ref = int(param.replace("ref_", ""))
+                if potential_ref != message.from_user.id:
+                    ref_id = potential_ref
+            except Exception:
+                pass
+        elif param in ("trial", "get_trial"):
+            register_user(message.from_user.id, message.from_user.username, message.from_user.first_name, ref_id)
+            ok, txt = await do_activate_trial(message.from_user.id, message.from_user.username, message.from_user.first_name)
+            if ok:
+                return await message.answer(txt, reply_markup=sub_active_kb(), parse_mode="Markdown")
+            else:
+                return await message.answer(txt, reply_markup=main_menu_kb(message.from_user.id), parse_mode="Markdown")
+        elif param == "admin":
+            register_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
+            if is_admin(message.from_user.id):
+                return await message.answer("👑 **Панель Создателя Welwes VPN:**", reply_markup=admin_kb(), parse_mode="Markdown")
+
+    register_user(message.from_user.id, message.from_user.username, message.from_user.first_name, ref_id)
+
+    # In Raketa VPN style: clean banner with buttons directly attached:
+    if os.path.exists(BANNER_PATH):
+        try:
+            photo = FSInputFile(BANNER_PATH)
+            await message.answer_photo(photo, reply_markup=main_menu_kb(message.from_user.id))
+            return
+        except Exception as e:
+            logging.error(f"Error sending banner: {e}")
+
+    await message.answer(f"⚡ **Добро пожаловать в {BRAND_NAME}!**", reply_markup=main_menu_kb(message.from_user.id), parse_mode="Markdown")
+
+@dp.message(Command("admin"))
+@dp.message(F.text.lower().in_(["админ", "админка", "панель", "admin", "панель создателя", "панель администратора"]))
+async def cmd_admin(message: Message, state: FSMContext):
+    parts = message.text.split()
+    if len(parts) > 1 and parts[1] == SECRET_ADMIN_KEY:
+        make_admin(message.from_user.id)
+        await message.answer("👑 **Поздравляю, Создатель! Права администратора успешно активированы!**", reply_markup=admin_kb(), parse_mode="Markdown")
+    elif is_admin(message.from_user.id):
+        await message.answer("👑 **Панель Создателя Welwes VPN:**", reply_markup=admin_kb(), parse_mode="Markdown")
+    else:
+        await message.answer("🔒 Введите пароль администратора в формате:\n`/admin welwes2026`", parse_mode="Markdown")
+
+@dp.message(F.text.lower().in_(["/trial", "пробный период", "пробник", "тест", "активировать пробный период", "активировать пробник", "бесплатный тест"]))
+async def cmd_trial_text(message: Message):
+    ok, txt = await do_activate_trial(message.from_user.id, message.from_user.username, message.from_user.first_name)
+    if ok:
+        await message.answer(txt, reply_markup=sub_active_kb(), parse_mode="Markdown")
+    else:
+        await message.answer(txt, reply_markup=main_menu_kb(message.from_user.id), parse_mode="Markdown")
+
+@dp.message(F.web_app_data)
+async def handle_webapp_data(message: Message, state: FSMContext):
+    data = message.web_app_data.data
+    action = data
+    try:
+        import json
+        payload = json.loads(data)
+        if isinstance(payload, dict):
+            action = payload.get("action", data)
+    except Exception:
+        pass
+
+    if action == "activate_trial":
+        ok, txt = await do_activate_trial(message.from_user.id, message.from_user.username, message.from_user.first_name)
+        if ok:
+            await message.answer(txt, reply_markup=sub_active_kb(), parse_mode="Markdown")
+        else:
+            await message.answer(txt, reply_markup=main_menu_kb(message.from_user.id), parse_mode="Markdown")
+    elif action == "admin_self_sub":
+        if is_admin(message.from_user.id):
+            new_sub, _ = set_sub(message.from_user.id, 100)
+            dt = datetime.fromtimestamp(new_sub).strftime("%d.%m.%Y в %H:%M")
+            await message.answer(f"👑 **Вечный VPN продлён на +100 дней!**\nДействует до: `{dt}`", reply_markup=admin_kb(), parse_mode="Markdown")
+
+@dp.callback_query(F.data == "back_main")
+async def cb_back_main(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    await state.clear()
+    if os.path.exists(BANNER_PATH):
+        photo = FSInputFile(BANNER_PATH)
+        await call.message.answer_photo(photo, reply_markup=main_menu_kb(call.from_user.id))
+    else:
+        await call.message.answer(f"⚡ **Главное меню {BRAND_NAME}:**", reply_markup=main_menu_kb(call.from_user.id), parse_mode="Markdown")
+
+# --- TRIAL ---
+@dp.callback_query(F.data == "get_trial")
+async def cb_get_trial(call: CallbackQuery):
+    await call.answer()
+    ok, txt = await do_activate_trial(call.from_user.id, call.from_user.username, call.from_user.first_name)
+    if ok:
+        await call.message.answer(txt, reply_markup=sub_active_kb(), parse_mode="Markdown")
+    else:
+        await call.message.answer(txt, reply_markup=main_menu_kb(call.from_user.id), parse_mode="Markdown")
+
+# --- MY KEYS / SUBSCRIPTION ---
+@dp.callback_query(F.data.in_(["my_keys", "my_sub"]))
+async def cb_my_keys(call: CallbackQuery):
+    await call.answer()
+    user = get_user(call.from_user.id)
+    now = int(time.time())
+    if not user or user[5] <= now:
+        text = (
+            f"❌ **У вас пока нет активной подписки.**\n\n"
+            f"Вы можете мгновенно оформить доступ со скидкой **-45%** или использовать промокод:"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💳 Купить подписку (-45%)", callback_data="buy_menu")],
+            [InlineKeyboardButton(text="🎟️ Ввести промокод / FunPay", callback_data="enter_promo")],
+            [InlineKeyboardButton(text="◀️ В главное меню", callback_data="back_main")]
+        ])
+        await call.message.answer(text, reply_markup=kb, parse_mode="Markdown")
+        return
+
+    expire_dt = datetime.fromtimestamp(user[5]).strftime("%d.%m.%Y в %H:%M")
+    days_left = max(0, int((user[5] - now) / 86400))
+    hours_left = max(0, int(((user[5] - now) % 86400) / 3600))
+
+    text = (
+        f"🔑 **Ваши ключи и подписка {BRAND_NAME}:**\n\n"
+        f"⏳ **Статус:** 🟢 АКТИВНА\n"
+        f"📅 **Действует до:** `{expire_dt}` (осталось ~{days_left} дн. {hours_left} ч.)\n\n"
+        f"🌍 **Входящие локации:**\n"
+        f"• 🇫🇮 **Финляндия** — Discord & Игры (пинг 20ms)\n"
+        f"• 🇺🇸 **США** — ChatGPT & Стриминг (100 Mbit/s)\n"
+        f"• 🇩🇪 **Германия** — YouTube 4K 60FPS (100 Mbit/s)\n\n"
+        f"🔗 **Ваша универсальная ссылка подписки:**\n"
+        f"`{MASTER_SUB_URL}`\n\n"
+        f"👇 *Используйте кнопки ниже для быстрого копирования или скачивания конфигурации:*"
+    )
+    await call.message.answer(text, reply_markup=sub_active_kb(), parse_mode="Markdown")
+
+@dp.callback_query(F.data == "copy_sub")
+async def cb_copy_sub(call: CallbackQuery):
+    await call.answer("Ссылка подписки скопирована!")
+    await call.message.answer(f"🔗 **Ваша ссылка-подписка:**\n`{MASTER_SUB_URL}`", parse_mode="Markdown")
+
+@dp.callback_query(F.data == "copy_bundle")
+async def cb_copy_bundle(call: CallbackQuery):
+    await call.answer("Base64 конфигурация скопирована!")
+    b64 = generate_sub_bundle_b64(call.from_user.id)
+    await call.message.answer(
+        f"📦 **Base64 подписка Welwes VPN (Все серверы в 1 ключе):**\n\n"
+        f"`{b64}`\n\n"
+        f"*(Скопируйте и нажмите «Импорт из буфера» в приложении Happ)*",
+        parse_mode="Markdown"
+    )
+
+@dp.callback_query(F.data == "copy_fi")
+async def cb_copy_fi(call: CallbackQuery):
+    await call.answer("Ключ Финляндия отправлен!")
+    await call.message.answer(f"🇫🇮 **Прямой ключ Финляндия (VLESS Reality):**\n`{FINLAND_VLESS}`", parse_mode="Markdown")
+
+@dp.callback_query(F.data == "copy_us")
+async def cb_copy_us(call: CallbackQuery):
+    await call.answer("Ключ США отправлен!")
+    await call.message.answer(f"🇺🇸 **Прямой ключ США (VLESS Reality):**\n`{USA_VLESS}`", parse_mode="Markdown")
+
+@dp.callback_query(F.data == "copy_de")
+async def cb_copy_de(call: CallbackQuery):
+    await call.answer("Ключ Германия отправлен!")
+    await call.message.answer(f"🇩🇪 **Прямой ключ Германия (VLESS Reality):**\n`{GERMANY_VLESS}`", parse_mode="Markdown")
+
+@dp.callback_query(F.data == "download_sub_file")
+async def cb_download_sub_file(call: CallbackQuery):
+    await call.answer()
+    raw_content = f"{FINLAND_VLESS}\n{USA_VLESS}\n{GERMANY_VLESS}\n"
+    file_bytes = raw_content.encode("utf-8")
+    doc = BufferedInputFile(file_bytes, filename=f"WelwesVPN_Config_{call.from_user.id}.txt")
+    await call.message.answer_document(doc, caption="📁 **Ваш готовый файл конфигурации Welwes VPN!**\n\nОткройте его через приложение Happ или Hiddify.")
+
+# --- BUY & PROMO ENGINE ---
+@dp.callback_query(F.data == "buy_menu")
+async def cb_buy_menu(call: CallbackQuery):
+    await call.answer()
+    user = get_user(call.from_user.id)
+    is_disc = bool(user and user[8] == 1)
+
+    disc_status = "🟢 **АКТИВИРОВАНА (-45%)**" if is_disc else "⚪ Не активирована"
+    text = (
+        f"💳 **Покупка | Продление подписки {BRAND_NAME}:**\n\n"
+        f"🔥 **Скидка -45% по промокоду `{ACTIVE_PROMO_CODE}`:** {disc_status}\n"
+        f"*(Скидка действует на ВСЕ тарифы от 7 дней и выше: 7д, 30д, 90д, 180д, 365д!)*\n\n"
+        f"🚀 **Автоматическая мгновенная выдача** ключей за 1 секунду сразу после оплаты!\n\n"
+        f"👇 **Выберите подходящий тариф:**"
+    )
+    await call.message.answer(text, reply_markup=buy_tariffs_kb(call.from_user.id), parse_mode="Markdown")
+
+@dp.callback_query(F.data == "activate_promo45")
+async def cb_activate_promo45(call: CallbackQuery):
+    set_discount_active(call.from_user.id, 1)
+    await call.answer("🎉 Промокод WELWES45 (-45%) успешно применён!", show_alert=True)
+    await cb_buy_menu(call)
+
+@dp.callback_query(F.data == "promo_already_active")
+async def cb_promo_already_active(call: CallbackQuery):
+    await call.answer("Скидка -45% уже применена ко всем вашим тарифам от 7 дней!", show_alert=False)
+
+@dp.callback_query(F.data.startswith("tariff_"))
+async def cb_choose_tariff(call: CallbackQuery):
+    await call.answer()
+    tid = call.data.replace("tariff_", "")
+    t = BASE_TARIFFS.get(tid)
+    if not t:
+        return
+
+    user = get_user(call.from_user.id)
+    is_disc = bool(user and user[8] == 1)
+    rub, stars, has_disc = get_tariff_prices(tid, is_disc)
+
+    order_id = f"W{int(time.time()) % 1000000}"
+    desc = f"Подписка Welwes VPN ({t['name']}) — Заказ #{order_id}"
+    payment_id, pay_url = await create_yookassa_payment(rub, desc, order_id, call.from_user.id, t["days"])
+    create_card_order(order_id, call.from_user.id, tid, t["days"], rub, payment_id, pay_url)
+
+    text = (
+        f"💳 **Выберите способ оплаты**\n\n"
+        f"📅 **Тариф:** {t['name']}\n"
+        f"💰 **Сумма:** {rub}.00 ₽\n\n"
+        f"⚡ *После оплаты по СБП / Т-Pay / Карте подписка активируется АВТОМАТИЧЕСКИ за несколько секунд!*\n\n"
+        f"_Нажимая кнопку «Перейти к оплате», вы подтверждаете, что ознакомились и согласны с условиями прописанными в Документации проекта._"
+    )
+    await call.message.answer(text, reply_markup=choose_payment_method_kb(call.from_user.id, tid, order_id, pay_url), parse_mode="Markdown")
+
+# --- STARS AUTOMATED PAYMENT ---
+@dp.callback_query(F.data.startswith("pay_stars_"))
+async def cb_send_stars_invoice(call: CallbackQuery):
+    await call.answer()
+    tid = call.data.replace("pay_stars_", "")
+    t = BASE_TARIFFS.get(tid)
+    if not t:
+        return
+
+    user = get_user(call.from_user.id)
+    is_disc = bool(user and user[8] == 1)
+    _, stars, _ = get_tariff_prices(tid, is_disc)
+
+    prices = [LabeledPrice(label=f"Подписка Welwes VPN ({t['name']})", amount=stars)]
+
+    await bot.send_invoice(
+        chat_id=call.from_user.id,
+        title=f"Welwes VPN — {t['name']}",
+        description=f"Автоматическая выдача VPN (Германия + Финляндия, 100M, YouTube 4K, Discord) на {t['name']}.",
+        payload=f"stars_sub_{t['days']}_{stars}",
+        currency="XTR",
+        prices=prices
+    )
+
+@dp.pre_checkout_query()
+async def process_pre_checkout(pre_checkout_query: PreCheckoutQuery):
+    await pre_checkout_query.answer(ok=True)
+
+@dp.message(F.successful_payment)
+async def process_successful_payment(message: Message):
+    payload = message.successful_payment.invoice_payload
+    days = 30
+    stars_amount = 65
+
+    if payload.startswith("stars_sub_"):
+        parts = payload.split("_")
+        try:
+            days = int(parts[2])
+            stars_amount = int(parts[3])
+        except Exception:
+            pass
+
+    # 1. Update user subscription:
+    new_sub, ref_id = set_sub(message.from_user.id, days)
+    expire_dt = datetime.fromtimestamp(new_sub).strftime("%d.%m.%Y в %H:%M")
+
+    # 2. Record stars payment into database vault:
+    add_stars_payment(message.from_user.id, stars_amount, days)
+
+    # 3. Reward referrer if applicable (+6 hours):
+    if ref_id:
+        try:
+            set_sub(ref_id, 0.25)
+            await bot.send_message(
+                ref_id,
+                f"🎉 **Ваш реферал приобрёл подписку Welwes VPN!**\nВам начислено **+6 часов** бонуса к вашей подписке!",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+
+    text = (
+        f"🎉 **ОПЛАТА УСПЕШНО ПОЛУЧЕНА!**\n\n"
+        f"✅ Вам АВТОМАТИЧЕСКИ начислено **+{days} дней** подписки {BRAND_NAME}!\n"
+        f"⏳ Подписка активна до: `{expire_dt}`\n\n"
+        f"🔗 **Ваша персональная ссылка для подключения:**\n"
+        f"`{MASTER_SUB_URL}`\n\n"
+        f"🚀 Нажмите кнопку ниже для получения ваших ключей и быстрой настройки:"
+    )
+    await message.answer(text, reply_markup=sub_active_kb(), parse_mode="Markdown")
+
+    # 4. Notify Admins:
+    admins = get_all_admins()
+    for a_id in admins:
+        try:
+            await bot.send_message(
+                a_id,
+                f"💰 **АВТОМАТИЧЕСКАЯ ОПЛАТА ЗВЁЗДАМИ!**\n\n"
+                f"👤 Пользователь: {message.from_user.first_name} (@{message.from_user.username})\n"
+                f"⭐ Получено: **+{stars_amount} Звёзд**\n"
+                f"⏳ Тариф: **{days} дней**\n\n"
+                f"Ключи выданы клиенту мгновенно!",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+
+# --- CARD / SBP / YOOKASSA AUTOMATED CHECKOUT ---
+async def fulfill_yookassa_order(order_row) -> bool:
+    order_id = order_row[0]
+    fresh = get_card_order(order_id)
+    if not fresh or fresh[6] == "completed":
+        return False
+
+    complete_card_order(order_id)
+    target_user_id = fresh[1]
+    days = fresh[3]
+    amount = fresh[4]
+    new_sub, ref_id = set_sub(target_user_id, days)
+    expire_dt = datetime.fromtimestamp(new_sub).strftime("%d.%m.%Y в %H:%M")
+
+    if ref_id:
+        try:
+            set_sub(ref_id, 0.25)
+            await bot.send_message(ref_id, "🎉 Ваш реферал купил VPN! Вам начислено +6 часов подписки!")
+        except Exception:
+            pass
+
+    try:
+        await bot.send_message(
+            target_user_id,
+            f"🎉 **ОПЛАТА ЮKASSA УСПЕШНО ПОЛУЧЕНА!**\n\n"
+            f"✅ Вам АВТОМАТИЧЕСКИ начислено **+{days} дней** подписки {BRAND_NAME}!\n"
+            f"⏳ Подписка активна до: `{expire_dt}`\n\n"
+            f"🔗 **Ваша универсальная ссылка подписки:**\n"
+            f"`{MASTER_SUB_URL}`\n\n"
+            f"Наслаждайтесь свободным и быстрым интернетом!",
+            reply_markup=sub_active_kb(),
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logging.error(f"Error notifying user on YooKassa fulfillment: {e}")
+
+    admins = get_all_admins()
+    for a_id in admins:
+        try:
+            await bot.send_message(
+                a_id,
+                f"💰 **АВТОМАТИЧЕСКАЯ ОПЛАТА ЮKASSA (СБП / КАРТА)!**\n\n"
+                f"🧾 Заказ: `#{order_id}`\n"
+                f"🆔 Клиент ID: `{target_user_id}`\n"
+                f"💵 Сумма: **{amount} ₽**\n"
+                f"⏳ Тариф: **{days} дней**\n\n"
+                f"Ключи выданы клиенту автоматически!",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+    return True
+
+@dp.callback_query(F.data.startswith("pay_card_"))
+async def cb_pay_card(call: CallbackQuery):
+    await call.answer()
+    tid = call.data.replace("pay_card_", "")
+    t = BASE_TARIFFS.get(tid)
+    if not t:
+        return
+
+    user = get_user(call.from_user.id)
+    is_disc = bool(user and user[8] == 1)
+    rub, stars, _ = get_tariff_prices(tid, is_disc)
+
+    order_id = f"W{int(time.time()) % 1000000}"
+    desc = f"Подписка Welwes VPN ({t['name']}) — Заказ #{order_id}"
+    payment_id, pay_url = await create_yookassa_payment(rub, desc, order_id, call.from_user.id, t["days"])
+    create_card_order(order_id, call.from_user.id, tid, t["days"], rub, payment_id, pay_url)
+
+    target_url = pay_url or get_setting("sbp_link", DEFAULT_SBP_LINK)
+
+    text = (
+        f"⚙️ **Создали счёт на оплату #{order_id}.**\n\n"
+        f"Нажмите на кнопку: «💳 Оплатить {rub} ₽»\n\n"
+        f"⚡ Выдача VPN происходит **автоматически** сразу после оплаты!"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"💳 Оплатить {rub} ₽ (СБП / Карта)", url=target_url)],
+        [InlineKeyboardButton(text="⚡ Проверить оплату", callback_data=f"check_card_{order_id}")],
+        [InlineKeyboardButton(text=f"⭐ Оплатить Звёздами моментально ({stars} ⭐)", callback_data=f"pay_stars_{tid}")],
+        [InlineKeyboardButton(text="◀️ Назад к тарифам", callback_data="buy_menu")]
+    ])
+    await call.message.answer(text, reply_markup=kb, parse_mode="Markdown")
+
+@dp.callback_query(F.data.startswith("check_card_"))
+async def cb_check_card_payment(call: CallbackQuery):
+    order_id = call.data.replace("check_card_", "")
+    order = get_card_order(order_id)
+    if not order:
+        await call.answer("Заказ не найден!", show_alert=True)
+        return
+
+    if order[6] == "completed":
+        await call.answer("Этот заказ уже был успешно оплачен и активирован!", show_alert=True)
+        return
+
+    payment_id = order[7] if len(order) > 7 else None
+    if payment_id:
+        yk_status = await check_yookassa_payment(payment_id)
+        if yk_status == "succeeded":
+            await call.answer("🎉 Оплата подтверждена ЮKassa! Выдаём VPN!", show_alert=True)
+            await fulfill_yookassa_order(order)
+            return
+        elif yk_status == "canceled":
+            await call.answer("❌ Этот счёт был отменён в ЮKassa. Создайте новый заказ в меню покупки.", show_alert=True)
+            return
+        elif yk_status == "pending":
+            await call.answer("⏳ Оплата в ЮKassa ещё не завершена. Как только вы оплатите, ключи придут автоматически!", show_alert=True)
+            return
+
+    await call.answer("Запрос на проверку отправлен! Ключи будут выданы сразу после подтверждения.", show_alert=True)
+    await call.message.answer(
+        f"⏳ **Заказ #{order_id} на сумму {order[4]} ₽ проверяется!**\n\n"
+        f"Вам не нужно писать в ЛС — как только оплата поступит, бот автоматически отправит вам ключи прямо в этот чат!",
+        parse_mode="Markdown"
+    )
+
+    # Send 1-click confirmation alert to admins:
+    admins = get_all_admins()
+    admin_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Подтвердить и выдать VPN", callback_data=f"adm_appr_{order_id}"),
+            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"adm_rej_{order_id}")
+        ]
+    ])
+    admin_msg = (
+        f"🔔 **НОВЫЙ ЗАКАЗ КАРТОЙ / СБП!**\n\n"
+        f"🧾 **Заказ:** `#{order_id}`\n"
+        f"👤 **Клиент:** {call.from_user.first_name} (@{call.from_user.username})\n"
+        f"🆔 **ID:** `{call.from_user.id}`\n"
+        f"💰 **Сумма:** **{order[4]} ₽**\n"
+        f"⏳ **Срок:** **{order[3]} дней**\n\n"
+        f"Нажмите кнопку ниже для моментальной выдачи VPN клиенту в 1 клик:"
+    )
+    for a_id in admins:
+        try:
+            await bot.send_message(a_id, admin_msg, reply_markup=admin_kb, parse_mode="Markdown")
+        except Exception:
+            pass
+
+@dp.callback_query(F.data.startswith("adm_appr_"))
+async def cb_admin_approve_order(call: CallbackQuery):
+    await call.answer()
+    if not is_admin(call.from_user.id):
+        return
+    order_id = call.data.replace("adm_appr_", "")
+    order = get_card_order(order_id)
+    if not order or order[6] == "completed":
+        return
+
+    complete_card_order(order_id)
+    target_user_id = order[1]
+    days = order[3]
+    new_sub, ref_id = set_sub(target_user_id, days)
+    expire_dt = datetime.fromtimestamp(new_sub).strftime("%d.%m.%Y в %H:%M")
+
+    # Reward referrer if exists (+6 hours):
+    if ref_id:
+        try:
+            set_sub(ref_id, 0.25)
+            await bot.send_message(ref_id, "🎉 Ваш реферал купил VPN! Вам начислено +6 часов подписки!")
+        except Exception:
+            pass
+
+    # Instant delivery to user:
+    try:
+        await bot.send_message(
+            target_user_id,
+            f"🎉 **ВАША ОПЛАТА ПОДТВЕРЖДЕНА!**\n\n"
+            f"✅ Вам начислено **+{days} дней** подписки {BRAND_NAME}!\n"
+            f"⏳ Подписка активна до: `{expire_dt}`\n\n"
+            f"🔗 **Ваша универсальная ссылка подписки:**\n"
+            f"`{MASTER_SUB_URL}`\n\n"
+            f"Наслаждайтесь свободным и быстрым интернетом!",
+            reply_markup=sub_active_kb(),
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logging.error(f"Error notifying user: {e}")
+
+    await call.message.edit_text(f"✅ **Заказ #{order_id} успешно подтвержден! VPN автоматически выдан клиенту `{target_user_id}`.**")
+
+@dp.callback_query(F.data.startswith("adm_rej_"))
+async def cb_admin_reject_order(call: CallbackQuery):
+    await call.answer()
+    if not is_admin(call.from_user.id):
+        return
+    order_id = call.data.replace("adm_rej_", "")
+    order = get_card_order(order_id)
+    if order:
+        try:
+            await bot.send_message(order[1], f"❌ Оплата по заказу #{order_id} не была найдена. Если произошла ошибка, свяжитесь с поддержкой: @{SUPPORT_USERNAME}")
+        except Exception:
+            pass
+    await call.message.edit_text(f"❌ **Заказ #{order_id} отклонен.**")
+
+# --- AFFILIATE & INVITE ---
+@dp.callback_query(F.data == "affiliate")
+async def cb_affiliate(call: CallbackQuery):
+    await call.answer()
+    invited, active = get_referral_stats(call.from_user.id)
+    ref_link = f"https://t.me/{BOT_USERNAME}?start=ref_{call.from_user.id}"
+    text = (
+        f"👥 **Партнёрская программа {BRAND_NAME}:**\n\n"
+        f"Приглашайте друзей и пользуйтесь быстрым VPN **абсолютно бесплатно**!\n\n"
+        f"🎁 **Условия:**\n"
+        f"• За каждого приглашенного друга вы получаете **+{FRIEND_BONUS_HOURS} часов бесплатного VPN** к вашей подписке!\n"
+        f"• Ваш друг получает скидку **-{FRIEND_DISCOUNT_PERCENT}%** на подписку и бесплатный тест!\n\n"
+        f"📊 **Ваша статистика:**\n"
+        f"• Всего переходов по вашей ссылке: **{invited}**\n"
+        f"• Активных пользователей: **{active}**\n"
+        f"• Заработано бонусов: **+{active * FRIEND_BONUS_HOURS} ч.**\n\n"
+        f"🔗 **Ваша реферальная ссылка:**\n`{ref_link}`"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎁 Пригласить друга (Поделиться)", url=f"https://t.me/share/url?url={ref_link}&text=Держи%20топовый%20VPN%20без%20блокировок%20со%20скидкой%2015%25!")],
+        [InlineKeyboardButton(text="◀️ В главное меню", callback_data="back_main")]
+    ])
+    await call.message.answer(text, reply_markup=kb, parse_mode="Markdown")
+
+@dp.callback_query(F.data == "invite_friend")
+async def cb_invite_friend(call: CallbackQuery):
+    await call.answer()
+    ref_link = f"https://t.me/{BOT_USERNAME}?start=ref_{call.from_user.id}"
+    text = (
+        f"🎁 **Пригласить друга в {BRAND_NAME}:**\n\n"
+        f"Отправьте другу эту ссылку. Как только он перейдет в бота, вы получите **+{FRIEND_BONUS_HOURS} часов VPN в подарок**, а друг получит скидку **-{FRIEND_DISCOUNT_PERCENT}%**!\n\n"
+        f"🔗 `{ref_link}`"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚀 Переслать ссылку другу", url=f"https://t.me/share/url?url={ref_link}&text=Держи%20топовый%20VPN%20без%20блокировок%20со%20скидкой%2015%25!")],
+        [InlineKeyboardButton(text="◀️ В главное меню", callback_data="back_main")]
+    ])
+    await call.message.answer(text, reply_markup=kb, parse_mode="Markdown")
+
+# --- PROMOCODE ACTIVATION ---
+@dp.callback_query(F.data == "enter_promo")
+async def cb_enter_promo(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    await state.set_state(Form.waiting_for_promocode)
+    text = (
+        f"🎟️ **Активация промокода / ключа FunPay:**\n\n"
+        f"Отправьте секретный код или промокод ответным сообщением сюда:"
+    )
+    await call.message.answer(text, reply_markup=back_kb(), parse_mode="Markdown")
+
+@dp.message(Form.waiting_for_promocode)
+async def process_promocode(message: Message, state: FSMContext):
+    code = message.text.strip().upper()
+    await state.clear()
+
+    # Universal 45% discount promo code check:
+    if code in [ACTIVE_PROMO_CODE, "PROMO45", "45%"]:
+        set_discount_active(message.from_user.id, 1)
+        text = (
+            f"🎉 **Промокод `{ACTIVE_PROMO_CODE}` успешно активирован!**\n\n"
+            f"Вам предоставлена скидка **-45%** на ВСЕ тарифы от 7 дней!\n"
+            f"Перейдите в раздел покупки, чтобы выбрать тариф по суперцене:"
+        )
+        await message.answer(text, reply_markup=buy_tariffs_kb(message.from_user.id), parse_mode="Markdown")
+        return
+
+    # Days promo code:
+    days, status = redeem_promocode(code, message.from_user.id)
+    if status == "ok":
+        text = (
+            f"🎉 **Код успешно активирован!**\n\n"
+            f"Вам начислено **+{days} дней** подписки {BRAND_NAME}!\n\n"
+            f"🔗 Ваша ссылка для подключения:\n`{MASTER_SUB_URL}`"
+        )
+        await message.answer(text, reply_markup=sub_active_kb(), parse_mode="Markdown")
+    elif status == "already_used":
+        await message.answer("❌ Этот промокод уже был активирован ранее!", reply_markup=main_menu_kb(message.from_user.id))
+    else:
+        await message.answer("❌ Неверный промокод! Проверьте правильность написания.", reply_markup=main_menu_kb(message.from_user.id))
+
+# --- INSTRUCTIONS ---
+@dp.callback_query(F.data == "instructions")
+async def cb_instructions(call: CallbackQuery):
+    await call.answer()
+    text = (
+        f"📖 **Инструкция по подключению {BRAND_NAME}:**\n\n"
+        f"💻 **Для ПК (Windows / Mac):**\n"
+        f"1. Скачайте бесплатную программу **[Happ](https://github.com/happ-proxy/happ)** или **[Hiddify](https://github.com/hiddify/hiddify-next/releases)**.\n"
+        f"2. Скопируйте ссылку подписки или скачайте файл конфигурации из раздела «Мои ключи».\n"
+        f"3. В программе нажмите **«+» → Импорт из буфера обмена**.\n"
+        f"4. Выберите сервер и нажмите большую кнопку **Подключиться**!\n\n"
+        f"⚠️ **Если в Happ пишет 'u/a' или значок интернета показывает 'Нет доступа':**\n"
+        f"• В Happ зайдите в **Настройки (шестерёнка) → DNS**.\n"
+        f"• Переключите DNS на **DoH (Cloudflare 1.1.1.1 или Google)**, так как стандартный UDP DNS блокируется в РФ!\n\n"
+        f"📱 **Для Телефона (iPhone / Android):**\n"
+        f"1. Установите приложение из App Store / Google Play:\n"
+        f"   • **iOS (iPhone):** Happ, Streisand, V2Box, Hiddify\n"
+        f"   • **Android:** Happ, v2rayNG, Hiddify\n"
+        f"2. Нажмите **«+» → Добавить подписку** и вставьте вашу ссылку.\n"
+        f"3. Включите VPN и наслаждайтесь YouTube в 4K и Discord!"
+    )
+    await call.message.answer(text, reply_markup=back_kb(), parse_mode="Markdown", disable_web_page_preview=True)
+
+# ----------------- ADMIN PANEL -----------------
+@dp.callback_query(F.data == "admin_panel")
+async def cb_admin_panel(call: CallbackQuery):
+    await call.answer()
+    if not is_admin(call.from_user.id):
+        return
+    await call.message.answer("👑 **Панель Создателя Welwes VPN:**", reply_markup=admin_kb(), parse_mode="Markdown")
+
+@dp.callback_query(F.data == "admin_self_sub")
+async def cb_admin_self_sub(call: CallbackQuery):
+    await call.answer("Вам успешно начислено +100 дней подписки!", show_alert=True)
+    if not is_admin(call.from_user.id):
+        return
+    set_sub(call.from_user.id, 100)
+    await cb_my_keys(call)
+
+@dp.callback_query(F.data == "admin_stars_balance")
+async def cb_admin_stars_balance(call: CallbackQuery):
+    await call.answer()
+    if not is_admin(call.from_user.id):
+        return
+    total_stars, total_payments = get_total_stars_earned()
+    rub_approx = int(total_stars * 1.5)
+    text = (
+        f"⭐ **Хранилище Звёзд (Telegram Stars):**\n\n"
+        f"💰 Заработано ботом: **{total_stars} ⭐**\n"
+        f"📊 Всего покупок звёздами: **{total_payments}**\n"
+        f"💵 Примерная сумма в рублях: **~{rub_approx} ₽**\n\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"📤 **Как вывести заработанные Звёзды в реальные деньги:**\n\n"
+        f"1. Откройте **[@BotFather](https://t.me/BotFather)**\n"
+        f"2. Отправьте команду: `/mybots`\n"
+        f"3. Выберите вашего бота (`@{BOT_USERNAME}`)\n"
+        f"4. Нажмите **Bot Settings** → **Payments** → **Stars Balance**\n"
+        f"5. Нажмите **Withdraw (Вывод)** на платформу **Fragment** (TON/криптовалюта или на карту)!\n\n"
+        f"*(Вывод доступен через 21 день после первой оплаты по правилам Telegram)*"
+    )
+    await call.message.answer(text, reply_markup=admin_kb(), parse_mode="Markdown")
+
+@dp.callback_query(F.data == "admin_get_avatar")
+async def cb_admin_get_avatar(call: CallbackQuery):
+    await call.answer()
+    if not is_admin(call.from_user.id):
+        return
+    if os.path.exists(AVATAR_PATH):
+        photo = FSInputFile(AVATAR_PATH)
+        await call.message.answer_photo(photo, caption="🖼️ **Официальная аватарка Welwes VPN!**\n\nУстановите её в @BotFather через команду `/setuserpic`!")
+    else:
+        await call.message.answer("Файл аватарки не найден на диске!")
+
+@dp.callback_query(F.data == "admin_stats")
+async def cb_admin_stats(call: CallbackQuery):
+    await call.answer()
+    if not is_admin(call.from_user.id):
+        return
+    total, active = get_stats()
+    total_stars, _ = get_total_stars_earned()
+    text = (
+        f"📊 **Статистика {BRAND_NAME}:**\n\n"
+        f"👥 Всего пользователей в боте: **{total}**\n"
+        f"🟢 Активных подписок сейчас: **{active}**\n"
+        f"⭐ Баланс хранилища звёзд: **{total_stars} ⭐**\n"
+        f"🖥️ Активных серверов в сети: **2** (🇩🇪 Германия, 🇫🇮 Финляндия)"
+    )
+    await call.message.answer(text, reply_markup=admin_kb(), parse_mode="Markdown")
+
+@dp.callback_query(F.data == "admin_gen_promo")
+async def cb_admin_gen_promo(call: CallbackQuery):
+    await call.answer()
+    if not is_admin(call.from_user.id):
+        return
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎟️ Промокод на 1 день", callback_data="gen_p_1")],
+        [InlineKeyboardButton(text="🎟️ Промокод на 7 дней", callback_data="gen_p_7")],
+        [InlineKeyboardButton(text="🎟️ Промокод на 30 дней (FunPay)", callback_data="gen_p_30")],
+        [InlineKeyboardButton(text="🎟️ Промокод на 90 дней", callback_data="gen_p_90")],
+        [InlineKeyboardButton(text="◀️ Назад в админку", callback_data="admin_panel")]
+    ])
+    await call.message.answer("🎟️ **Выберите длительность промокода для генерации:**", reply_markup=kb, parse_mode="Markdown")
+
+@dp.callback_query(F.data.startswith("gen_p_"))
+async def cb_gen_promo_days(call: CallbackQuery):
+    await call.answer()
+    if not is_admin(call.from_user.id):
+        return
+    days = int(call.data.replace("gen_p_", ""))
+    code = f"WELWES-{days}D-" + uuid.uuid4().hex[:6].upper()
+    create_promocode(code, days, call.from_user.id)
+    text = (
+        f"✅ **Промокод успешно создан!**\n\n"
+        f"🔑 Код: `{code}`\n"
+        f"⏳ Длительность: **{days} дней**\n\n"
+        f"Отправьте этот код покупателю на FunPay — он введет его в бота и сразу получит подписку!"
+    )
+    await call.message.answer(text, reply_markup=admin_kb(), parse_mode="Markdown")
+
+@dp.callback_query(F.data == "admin_broadcast_prompt")
+async def cb_admin_broadcast_prompt(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    if not is_admin(call.from_user.id):
+        return
+    await state.set_state(Form.waiting_for_broadcast)
+    await call.message.answer(
+        "📢 **Рассылка сообщений:**\n\n"
+        "Отправьте сообщение (текст), которое получат ВСЕ пользователи бота:",
+        reply_markup=back_kb(),
+        parse_mode="Markdown"
+    )
+
+@dp.message(Form.waiting_for_broadcast)
+async def process_broadcast(message: Message, state: FSMContext):
+    await state.clear()
+    users = get_all_user_ids()
+    sent_count = 0
+    broadcast_text = f"📢 **Объявление от {BRAND_NAME}:**\n\n{message.text}"
+
+    for uid in users:
+        try:
+            await bot.send_message(uid, broadcast_text, parse_mode="Markdown")
+            sent_count += 1
+            await asyncio.sleep(0.05)
+        except Exception:
+            pass
+
+    await message.answer(f"✅ **Рассылка успешно завершена!**\nСообщение доставлено **{sent_count}** пользователям.", reply_markup=admin_kb(), parse_mode="Markdown")
+
+# --- ADMIN GIVE / TAKE SUBSCRIPTION ---
+@dp.callback_query(F.data == "admin_give_sub_prompt")
+async def cb_admin_give_sub_prompt(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    if not is_admin(call.from_user.id):
+        return
+    await state.set_state(Form.waiting_for_give_sub_user)
+    text = (
+        "👑 **Выдача подписки пользователю:**\n\n"
+        "Отправьте **ID пользователя** (например: `123456789`) или его **@username** ответным сообщением:\n\n"
+        "*(Или используйте быструю команду: `/give_sub ID ДНЕЙ`)*"
+    )
+    await call.message.answer(text, reply_markup=back_kb(), parse_mode="Markdown")
+
+@dp.message(Form.waiting_for_give_sub_user)
+async def process_give_sub_user(message: Message, state: FSMContext):
+    target_raw = message.text.strip().lstrip("@")
+    target_id = None
+    if target_raw.isdigit():
+        target_id = int(target_raw)
+    else:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT user_id FROM users WHERE LOWER(username) = LOWER(?)", (target_raw,))
+        row = c.fetchone()
+        conn.close()
+        if row:
+            target_id = row[0]
+
+    if not target_id:
+        await message.answer("❌ Пользователь с таким ID/юзернеймом не найден в базе бота! Попробуйте снова ввести ID:", reply_markup=back_kb())
+        return
+
+    await state.update_data(target_id=target_id)
+    await state.set_state(Form.waiting_for_give_sub_days)
+    await message.answer(f"👤 Пользователь найден: `ID: {target_id}`\n\nТеперь введите **количество дней подписки** (например: `30`):", reply_markup=back_kb(), parse_mode="Markdown")
+
+@dp.message(Form.waiting_for_give_sub_days)
+async def process_give_sub_days(message: Message, state: FSMContext):
+    data = await state.get_data()
+    target_id = data.get("target_id")
+    await state.clear()
+    try:
+        days = float(message.text.strip())
+    except ValueError:
+        await message.answer("❌ Введите число дней цифрами!", reply_markup=admin_kb())
+        return
+
+    new_sub, _ = set_sub(target_id, days)
+    dt = datetime.fromtimestamp(new_sub).strftime("%d.%m.%Y %H:%M")
+
+    try:
+        await bot.send_message(
+            target_id,
+            f"🎉 **Вам начислена подписка Welwes VPN на {int(days) if days.is_integer() else days} дн.!**\n"
+            f"📅 Действует до: `{dt}`\n\n"
+            f"🔑 Ваши ключи и подписка в разделе **«🔑 Мои ключи»**!",
+            parse_mode="Markdown"
+        )
+    except Exception:
+        pass
+
+    await message.answer(
+        f"✅ **Подписка успешно выдана!**\n\n"
+        f"👤 Пользователь: `{target_id}`\n"
+        f"⏳ Добавлено: **{days} дн.**\n"
+        f"📅 Действует до: `{dt}`",
+        reply_markup=admin_kb(),
+        parse_mode="Markdown"
+    )
+
+@dp.message(Command("give_sub"))
+@dp.message(Command("выдать"))
+async def cmd_give_sub_direct(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.split()
+    if len(parts) < 3:
+        await message.answer("ℹ️ Использование: `/give_sub ID_ИЛИ_ЮЗЕР ДНЕЙ`\nПример: `/give_sub 8297844640 30` или `/give_sub @username 30`", parse_mode="Markdown")
+        return
+    target_raw = parts[1].strip().lstrip("@")
+    try:
+        days = float(parts[2].strip())
+    except ValueError:
+        await message.answer("❌ Количество дней должно быть числом!")
+        return
+
+    target_id = None
+    if target_raw.isdigit():
+        target_id = int(target_raw)
+    else:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT user_id FROM users WHERE LOWER(username) = LOWER(?)", (target_raw,))
+        row = c.fetchone()
+        conn.close()
+        if row:
+            target_id = row[0]
+
+    if not target_id:
+        await message.answer("❌ Пользователь не найден в базе бота!")
+        return
+
+    new_sub, _ = set_sub(target_id, days)
+    dt = datetime.fromtimestamp(new_sub).strftime("%d.%m.%Y %H:%M")
+
+    try:
+        await bot.send_message(
+            target_id,
+            f"🎉 **Вам начислена подписка Welwes VPN на {int(days) if days.is_integer() else days} дн.!**\n"
+            f"📅 Действует до: `{dt}`\n\n"
+            f"🔑 Ваши ключи и подписка в разделе **«🔑 Мои ключи»**!",
+            parse_mode="Markdown"
+        )
+    except Exception:
+        pass
+
+    await message.answer(f"✅ **Подписка успешно выдана!**\n👤 Пользователь: `{target_id}`\n⏳ Срок: **{days} дн.** (до `{dt}`)", parse_mode="Markdown")
+
+@dp.message(Command("take_sub"))
+@dp.message(Command("забрать"))
+async def cmd_take_sub_direct(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.split()
+    if len(parts) < 2:
+        await message.answer("ℹ️ Использование: `/take_sub ID_ИЛИ_ЮЗЕР`", parse_mode="Markdown")
+        return
+    target_raw = parts[1].strip().lstrip("@")
+    target_id = None
+    if target_raw.isdigit():
+        target_id = int(target_raw)
+    else:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT user_id FROM users WHERE LOWER(username) = LOWER(?)", (target_raw,))
+        row = c.fetchone()
+        conn.close()
+        if row:
+            target_id = row[0]
+
+    if not target_id:
+        await message.answer("❌ Пользователь не найден в базе!")
+        return
+
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE users SET sub_until = 0 WHERE user_id = ?", (target_id,))
+    conn.commit()
+    conn.close()
+
+    await message.answer(f"🚫 **Подписка пользователя `{target_id}` аннулирована.**", parse_mode="Markdown")
+
+# --- ADMIN DB DOWNLOAD ---
+@dp.callback_query(F.data == "admin_get_db")
+@dp.message(Command("get_db"))
+@dp.message(Command("db"))
+@dp.message(Command("база"))
+async def cb_admin_get_db(event: Message | CallbackQuery):
+    uid = event.from_user.id
+    if not is_admin(uid):
+        return
+    if isinstance(event, CallbackQuery):
+        await event.answer()
+        msg = event.message
+    else:
+        msg = event
+
+    if os.path.exists(DB_PATH):
+        db_file = FSInputFile(DB_PATH, filename=f"users_backup_{int(time.time())}.db")
+        await msg.answer_document(db_file, caption="📁 **Резервная копия базы данных Welwes VPN (users.db)**")
+    else:
+        await msg.answer("❌ Файл базы данных не найден!")
+
+# --- SBP LINK ADMIN CONFIGURATION ---
+@dp.callback_query(F.data == "admin_set_sbp")
+async def cb_admin_set_sbp(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    if not is_admin(call.from_user.id):
+        return
+    current_link = get_setting("sbp_link", DEFAULT_SBP_LINK)
+    await state.set_state(Form.waiting_for_sbp_link)
+    text = (
+        f"🔗 **Настройка платёжной ссылки СБП:**\n\n"
+        f"Текущая ссылка:\n`{current_link}`\n\n"
+        f"Отправьте вашу персональную ссылку на оплату СБП (из Т-Банка, Сбера или агрегатора) ответным сообщением сюда:"
+    )
+    await call.message.answer(text, reply_markup=back_kb(), parse_mode="Markdown")
+
+@dp.message(Form.waiting_for_sbp_link)
+async def process_set_sbp_link(message: Message, state: FSMContext):
+    await state.clear()
+    new_url = message.text.strip()
+    if not new_url.startswith("http"):
+        await message.answer("❌ Ссылка должна начинаться с http:// или https://!", reply_markup=admin_kb())
+        return
+    set_setting("sbp_link", new_url)
+    await message.answer(f"✅ **Ссылка СБП успешно обновлена!**\n\nТеперь при нажатии «Оплатить» клиенты будут переходить по этой ссылке:\n`{new_url}`", reply_markup=admin_kb(), parse_mode="Markdown")
+
+# --- REVIEWS WORKFLOW ---
+@dp.callback_query(F.data == "reviews_menu")
+async def cb_reviews_menu(call: CallbackQuery):
+    await call.answer()
+    ch = get_setting("reviews_channel", "@welwes_reviews")
+    text = (
+        f"⭐️ **Отзывы клиентов {BRAND_NAME}:**\n\n"
+        f"В нашем официальном канале вы можете посмотреть честные отзывы пользователей, реальные замеры скорости и скриншоты пинга в играх!\n\n"
+        f"🎁 **Акция:** Оставьте отзыв и получите **случайный подарок от +1 до +12 часов** бесплатного VPN!\n"
+        f"*(Бонус начисляется 1 раз за первый отзыв)*\n\n"
+        f"📢 Официальный канал отзывов: `{ch}`"
+    )
+    await call.message.answer(text, reply_markup=reviews_menu_kb(), parse_mode="Markdown")
+
+@dp.callback_query(F.data == "leave_review")
+async def cb_leave_review(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    if has_user_reviewed(call.from_user.id):
+        await call.message.answer(
+            "❌ **Вы уже оставляли отзыв о нашем сервисе!**\n\n"
+            "Каждый пользователь может оставить отзыв только 1 раз. Спасибо за вашу поддержку!",
+            reply_markup=main_menu_kb(call.from_user.id),
+            parse_mode="Markdown"
+        )
+        return
+
+    user = get_user(call.from_user.id)
+    now = int(time.time())
+    if not user or (user[5] <= now and user[4] == 0):
+        await call.message.answer(
+            "❌ **Оставить отзыв могут только пользователи, которые протестировали или купили Welwes VPN.**\n\n"
+            "Пожалуйста, сначала активируйте бесплатный тест на 6 часов или оформите подписку!",
+            reply_markup=main_menu_kb(call.from_user.id),
+            parse_mode="Markdown"
+        )
+        return
+
+    await state.set_state(Form.waiting_for_review_rating)
+    text = (
+        f"✍️ **Оценка сервиса {BRAND_NAME}:**\n\n"
+        f"Пожалуйста, оцените качество работы нашего VPN от 1 до 5 звёзд:"
+    )
+    await call.message.answer(text, reply_markup=review_rating_kb(), parse_mode="Markdown")
+
+@dp.callback_query(F.data.startswith("rev_rate_"))
+async def cb_rev_rate(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    rating = int(call.data.replace("rev_rate_", ""))
+    await state.update_data(rating=rating)
+    await state.set_state(Form.waiting_for_review_text)
+
+    stars_str = "⭐️" * rating
+    text = (
+        f"⭐ **Вы выбрали оценку:** {stars_str} ({rating}/5)\n\n"
+        f"💬 Теперь напишите **текст вашего отзыва** (как вам скорость, пинг, YouTube 4K, игры).\n\n"
+        f"📸 *Вы также можете отправить отзыв вместе со скриншотом Speedtest!*"
+    )
+    await call.message.answer(text, reply_markup=back_kb(), parse_mode="Markdown")
+
+@dp.message(Form.waiting_for_review_text, F.photo)
+@dp.message(Form.waiting_for_review_text, F.text)
+async def process_review_submission(message: Message, state: FSMContext):
+    data = await state.get_data()
+    rating = data.get("rating", 5)
+    await state.clear()
+
+    if has_user_reviewed(message.from_user.id):
+        await message.answer("❌ **Вы уже оставляли отзыв ранее!**\nОставить отзыв можно только один раз.", reply_markup=main_menu_kb(message.from_user.id), parse_mode="Markdown")
+        return
+
+    review_text = message.caption if message.photo else message.text
+    if not review_text:
+        review_text = "Отличный сервис, скорость супер!"
+
+    photo_id = message.photo[-1].file_id if message.photo else None
+    user = get_user(message.from_user.id)
+    now = int(time.time())
+
+    tariff_name = "Подписка Welwes VPN"
+    if user and user[5] > now:
+        days_total = max(1, int((user[5] - now) / 86400))
+        tariff_name = f"Активная подписка ({days_total} дн.)"
+    elif user and user[4] == 1:
+        tariff_name = "Тестовый период (6 часов)"
+
+    username_str = f"@{message.from_user.username}" if message.from_user.username else (message.from_user.first_name or "Клиент Welwes VPN")
+
+    # Anti-abuse: random hours between 1 and 12, granted only once
+    random_hours = random.randint(1, 12)
+    bonus_fraction_days = round(random_hours / 24, 4)
+
+    # Save to database
+    add_review(message.from_user.id, username_str, rating, review_text, photo_id, tariff_name)
+
+    # Reward user (+1 to +12 hours)
+    set_sub(message.from_user.id, bonus_fraction_days)
+    bonus_note = f"🎁 Вам начислено **+{random_hours} ч.** бесплатной подписки в подарок!"
+
+    # Send to reviews channel using safe HTML format and fallbacks
+    stars_str = "⭐️" * rating
+    safe_user = html.escape(username_str)
+    safe_tariff = html.escape(tariff_name)
+    safe_text = html.escape(review_text)
+    caption_html = (
+        f"{stars_str} <b>Новый отзыв о {BRAND_NAME}!</b>\n\n"
+        f"👤 <b>Клиент:</b> {safe_user}\n"
+        f"💳 <b>Тариф:</b> <code>{safe_tariff}</code>\n"
+        f"⭐ <b>Оценка:</b> {rating} из 5 ({stars_str})\n\n"
+        f"💬 <b>Отзыв:</b>\n«{safe_text}»\n\n"
+        f"🚀 <b>Подключить {BRAND_NAME}:</b> @{BOT_USERNAME}"
+    )
+
+    channel_id = get_setting("reviews_channel", "@welwes_reviews")
+    targets = [channel_id, "@welwes_reviews"]
+    for target in targets:
+        try:
+            if isinstance(target, str) and (target.startswith("-100") or target.isdigit() or (target.startswith("-") and target[1:].isdigit())):
+                t_id = int(target)
+            else:
+                t_id = target
+            if photo_id:
+                await bot.send_photo(chat_id=t_id, photo=photo_id, caption=caption_html, parse_mode="HTML")
+            else:
+                await bot.send_message(chat_id=t_id, text=caption_html, parse_mode="HTML")
+            break
+        except Exception as e:
+            logging.error(f"Failed sending review to {target}: {e}")
+
+    # Notify admins
+    admins = get_all_admins()
+    for aid in admins:
+        try:
+            await bot.send_message(
+                aid,
+                f"🔔 **Новый отзыв в боте от {username_str} ({rating}/5)!**\n(Бонус: +{random_hours}ч)\n\n«{review_text}»",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+
+    success_text = (
+        f"🎉 **Огромное спасибо за ваш отзыв!**\n\n"
+        f"{bonus_note}\n\n"
+        f"📢 Ваш отзыв опубликован в официальном канале `{channel_id}`!"
+    )
+    await message.answer(success_text, reply_markup=main_menu_kb(message.from_user.id), parse_mode="Markdown")
+
+# --- ADMIN REVIEWS CHANNEL SETTING ---
+@dp.callback_query(F.data == "admin_set_reviews_ch")
+async def cb_admin_set_reviews_ch(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    if not is_admin(call.from_user.id):
+        return
+    current_ch = get_setting("reviews_channel", "@welwes_reviews")
+    await state.set_state(Form.waiting_for_reviews_channel)
+    text = (
+        f"📢 **Настройка канала с отзывами:**\n\n"
+        f"Текущий канал: `{current_ch}`\n\n"
+        f"Отправьте юзернейм канала (например: `@welwes_reviews` или ссылку) ответным сообщением:\n\n"
+        f"*(Не забудьте добавить бота @{BOT_USERNAME} в этот канал как администратора с правом публиковать сообщения)*"
+    )
+    await call.message.answer(text, reply_markup=back_kb(), parse_mode="Markdown")
+
+@dp.message(Form.waiting_for_reviews_channel)
+async def process_set_reviews_channel(message: Message, state: FSMContext):
+    await state.clear()
+    ch = message.text.strip()
+    if not ch.startswith("@") and not ch.startswith("https://t.me/"):
+        ch = "@" + ch
+    set_setting("reviews_channel", ch)
+    await message.answer(f"✅ **Канал для отзывов успешно установлен:** `{ch}`\n\n*Убедитесь, что бот @{BOT_USERNAME} добавлен в него как администратор!*", reply_markup=admin_kb(), parse_mode="Markdown")
+
+@dp.message(Command("set_reviews_channel"))
+async def cmd_set_reviews_channel(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer("ℹ️ Использование: `/set_reviews_channel @название_канала`", parse_mode="Markdown")
+        return
+    ch = parts[1].strip()
+    if not ch.startswith("@") and not ch.startswith("https://t.me/"):
+        ch = "@" + ch
+    set_setting("reviews_channel", ch)
+    await message.answer(f"✅ **Канал для отзывов успешно установлен:** `{ch}`\n\n*Убедитесь, что бот @{BOT_USERNAME} добавлен в этот канал как администратор с правом публикации!*", parse_mode="Markdown")
+
+# ----------------- BIND REVIEWS GROUP / CHANNEL HANDLERS -----------------
+def extract_forward_chat(message: Message):
+    if message.forward_from_chat:
+        return message.forward_from_chat
+    if hasattr(message, "forward_origin") and message.forward_origin:
+        origin = message.forward_origin
+        if hasattr(origin, "chat") and origin.chat:
+            return origin.chat
+    return None
+
+@dp.message(Command("bind_reviews", "set_reviews", "reviews_here", "bind"))
+@dp.message(F.text.lower().in_(["/bind_reviews", "/set_reviews", "/привязать_отзывы", "привязать отзывы", "отзывы сюда", "/bind"]))
+async def cmd_bind_reviews(message: Message):
+    if message.chat.type in ("group", "supergroup"):
+        is_bot_adm = is_admin(message.from_user.id)
+        is_chat_adm = False
+        try:
+            m = await bot.get_chat_member(message.chat.id, message.from_user.id)
+            if m.status in ("creator", "administrator"):
+                is_chat_adm = True
+        except Exception:
+            pass
+
+        if not (is_bot_adm or is_chat_adm):
+            await message.reply("⛔️ Команда привязки доступна только администраторам группы!")
+            return
+
+        cid_str = str(message.chat.id)
+        title = message.chat.title or "Группа отзывов"
+        set_setting("reviews_channel", cid_str)
+        set_setting("reviews_channel_title", title)
+
+        if message.chat.username:
+            set_setting("reviews_channel_link", f"https://t.me/{message.chat.username}")
+        else:
+            try:
+                inv = await bot.create_chat_invite_link(message.chat.id)
+                if inv and inv.invite_link:
+                    set_setting("reviews_channel_link", inv.invite_link)
+            except Exception:
+                pass
+
+        await message.reply(
+            f"🎉 **Группа успешно привязана для отзывов {BRAND_NAME}!**\n\n"
+            f"📌 **Чат:** {title}\n"
+            f"🆔 **ID:** `{cid_str}`\n\n"
+            f"Все новые отзывы клиентов теперь будут автоматически отправляться в этот чат! 🚀\n"
+            f"*(Убедитесь, что у бота @{BOT_USERNAME} есть право отправлять сообщения и фото)*",
+            parse_mode="Markdown"
+        )
+    elif message.chat.type == "private":
+        if not is_admin(message.from_user.id):
+            return
+        await message.reply(
+            f"💡 **Как легко привязать группу или канал для отзывов:**\n\n"
+            f"🔹 **Если это группа (чат):**\n"
+            f"1. Добавьте бота @{BOT_USERNAME} в группу с отзывами.\n"
+            f"2. Прямо в этой группе напишите команду: `/bind_reviews`\n\n"
+            f"🔹 **Если это канал:**\n"
+            f"1. Добавьте бота @{BOT_USERNAME} в канал администратором.\n"
+            f"2. Просто **перешлите (Forward)** любой пост из вашего канала сюда в диалог с ботом!",
+            parse_mode="Markdown"
+        )
+
+@dp.channel_post(Command("bind_reviews", "set_reviews", "bind"))
+@dp.channel_post(F.text.lower().in_(["/bind_reviews", "/set_reviews", "/привязать_отзывы", "привязать отзывы", "/bind"]))
+async def channel_post_bind_reviews(message: Message):
+    cid_str = str(message.chat.id)
+    title = message.chat.title or "Канал отзывов"
+    set_setting("reviews_channel", cid_str)
+    set_setting("reviews_channel_title", title)
+
+    if message.chat.username:
+        set_setting("reviews_channel_link", f"https://t.me/{message.chat.username}")
+    else:
+        try:
+            inv = await bot.create_chat_invite_link(message.chat.id)
+            if inv and inv.invite_link:
+                set_setting("reviews_channel_link", inv.invite_link)
+        except Exception:
+            pass
+
+    try:
+        await message.edit_text(
+            f"✅ **Канал успешно привязан для публикации отзывов {BRAND_NAME}!**\n\n"
+            f"📌 **Канал:** {title}\n"
+            f"🆔 **ID:** `{cid_str}`\n\n"
+            f"*(Этот сервисный пост можно удалить)*",
+            parse_mode="Markdown"
+        )
+    except Exception:
+        await message.reply(
+            f"✅ **Канал успешно привязан для публикации отзывов {BRAND_NAME}!**\n"
+            f"🆔 **ID:** `{cid_str}`",
+            parse_mode="Markdown"
+        )
+
+# Forward any message from channel to bot in PM to bind channel
+@dp.message(F.chat.type == "private", F.forward_from_chat)
+async def process_forwarded_for_reviews(message: Message, state: FSMContext):
+    f_chat = extract_forward_chat(message)
+    if f_chat and is_admin(message.from_user.id):
+        cid_str = str(f_chat.id)
+        title = f_chat.title or "Канал отзывов"
+
+        set_setting("reviews_channel", cid_str)
+        set_setting("reviews_channel_title", title)
+        if f_chat.username:
+            set_setting("reviews_channel_link", f"https://t.me/{f_chat.username}")
+        else:
+            try:
+                inv = await bot.create_chat_invite_link(f_chat.id)
+                if inv and inv.invite_link:
+                    set_setting("reviews_channel_link", inv.invite_link)
+            except Exception:
+                pass
+
+        await state.clear()
+        await message.answer(
+            f"🎉 **Канал успешно привязан для отзывов {BRAND_NAME}!**\n\n"
+            f"📢 **Канал:** {title}\n"
+            f"🆔 **ID:** `{cid_str}`\n\n"
+            f"Все новые отзывы клиентов теперь будут автоматически отправляться в этот канал! 🚀\n"
+            f"*(Убедитесь, что бот @{BOT_USERNAME} добавлен в него как администратор с правом публикации сообщений)*",
+            reply_markup=admin_kb(),
+            parse_mode="Markdown"
+        )
+
+# --- ADMIN WEBAPP URL SETTING ---
+@dp.callback_query(F.data == "admin_set_webapp")
+async def cb_admin_set_webapp(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    if not is_admin(call.from_user.id):
+        return
+    current_url = get_setting("webapp_url", "не установлен")
+    await state.set_state(Form.waiting_for_webapp_url)
+    text = (
+        f"🌐 **Настройка Telegram Mini App (Web App):**\n\n"
+        f"Текущий URL: `{current_url}`\n\n"
+        f"Отправьте публичную `https://` ссылку на ваш WebApp (например, GitHub Pages, Vercel или домен) ответным сообщением:\n\n"
+        f"*(Telegram требует обязательный HTTPS протокол)*"
+    )
+    await call.message.answer(text, reply_markup=back_kb(), parse_mode="Markdown")
+
+@dp.message(Form.waiting_for_webapp_url)
+async def process_set_webapp(message: Message, state: FSMContext):
+    await state.clear()
+    url = message.text.strip()
+    if not url.startswith("https://"):
+        await message.answer("❌ URL для WebApp должен обязательно начинаться с `https://`!\nПопробуйте снова через админку.", reply_markup=admin_kb(), parse_mode="Markdown")
+        return
+    set_setting("webapp_url", url)
+    try:
+        await bot.set_chat_menu_button(
+            menu_button=types.MenuButtonWebApp(
+                text="Открыть VPN",
+                web_app=types.WebAppInfo(url=url)
+            )
+        )
+        await message.answer(f"✅ **Кнопка WebApp «Открыть VPN» и Mini App успешно подключены!**\n\nURL: `{url}`", reply_markup=admin_kb(), parse_mode="Markdown")
+    except Exception as e:
+        await message.answer(f"⚠️ URL сохранен в базу, но Telegram сообщил об ошибке: {e}", reply_markup=admin_kb(), parse_mode="Markdown")
+
+@dp.message(Command("set_webapp"))
+async def cmd_set_webapp(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        current_url = get_setting("webapp_url", "не установлен")
+        await message.answer(
+            f"ℹ️ **Управление Telegram Mini App (Web App):**\n\n"
+            f"Текущий URL: `{current_url}`\n\n"
+            f"Для установки отправьте:\n"
+            f"`/set_webapp https://ваш-домен-или-github.io/папка/`",
+            parse_mode="Markdown"
+        )
+        return
+    url = parts[1].strip()
+    if not url.startswith("https://"):
+        await message.answer("❌ URL для WebApp должен обязательно начинаться с `https://` (требование Telegram)!", parse_mode="Markdown")
+        return
+    set_setting("webapp_url", url)
+    try:
+        await bot.set_chat_menu_button(
+            menu_button=types.MenuButtonWebApp(
+                text="Открыть VPN",
+                web_app=types.WebAppInfo(url=url)
+            )
+        )
+        await message.answer(f"✅ **Кнопка «Открыть VPN» и Mini App успешно подключены!**\n\nURL: `{url}`", parse_mode="Markdown")
+    except Exception as e:
+        await message.answer(f"⚠️ URL сохранен в базу, но Telegram сообщил об ошибке: {e}", parse_mode="Markdown")
+
+# --- ADMIN YOOKASSA SHOP ID SETTING ---
+@dp.callback_query(F.data == "admin_set_yookassa")
+async def cb_admin_set_yookassa(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    if not is_admin(call.from_user.id):
+        return
+    cur_shop = get_setting("yookassa_shop_id", DEFAULT_YOOKASSA_SHOP_ID) or "не установлен"
+    cur_key = get_setting("yookassa_secret_key", DEFAULT_YOOKASSA_SECRET_KEY)
+    masked_key = f"{cur_key[:12]}...{cur_key[-6:]}" if len(cur_key) > 18 else cur_key
+    await state.set_state(Form.waiting_for_yookassa_shop_id)
+    text = (
+        f"💳 **Настройка автооплаты ЮKassa (API v3):**\n\n"
+        f"• **Секретный ключ:** `{masked_key}` (✅ подключён)\n"
+        f"• **Shop ID (Идентификатор магазина):** `{cur_shop}`\n\n"
+        f"Отправьте ваш **Shop ID** (6–7 цифр из левого верхнего угла личного кабинета ЮKassa рядом с названием магазина) ответным сообщением:"
+    )
+    await call.message.answer(text, reply_markup=back_kb(), parse_mode="Markdown")
+
+@dp.message(Form.waiting_for_yookassa_shop_id)
+async def process_set_yookassa_shop_id(message: Message, state: FSMContext):
+    await state.clear()
+    val = message.text.strip()
+    if ":" in val:
+        sid, skey = val.split(":", 1)
+        set_setting("yookassa_shop_id", sid.strip())
+        set_setting("yookassa_secret_key", skey.strip())
+    else:
+        set_setting("yookassa_shop_id", val)
+    await message.answer(
+        f"✅ **Shop ID ЮKassa (`{get_setting('yookassa_shop_id')}`) успешно сохранён!**\n\n"
+        f"Теперь все кнопки оплаты (СБП / Т-Pay / Карта) автоматически создают официальный счёт ЮKassa и выдают подписку за несколько секунд после оплаты!",
+        reply_markup=admin_kb(),
+        parse_mode="Markdown"
+    )
+
+@dp.message(Command("shopid"))
+async def cmd_set_shopid(message: Message):
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        cur_shop = get_setting("yookassa_shop_id", DEFAULT_YOOKASSA_SHOP_ID) or "не установлен"
+        await message.answer(f"💳 Текущий Shop ID ЮKassa: `{cur_shop}`\nДля установки отправьте: `/shopid 123456`", parse_mode="Markdown")
+        return
+    sid = parts[1].strip()
+    set_setting("yookassa_shop_id", sid)
+    await message.answer(f"✅ **Shop ID ЮKassa (`{sid}`) успешно установлен!** Автооплата СБП / Картой полностью активна!", parse_mode="Markdown")
+
+# --- CANCEL PAYMENT HANDLER ---
+@dp.message(F.text == "🔴 Отменить оплату")
+async def process_cancel_payment(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("❌ Запрос на оплату отменён.", reply_markup=types.ReplyKeyboardRemove())
+    await cmd_start(message, state)
+
+async def yookassa_auto_poll_loop():
+    while True:
+        try:
+            pending = get_pending_yookassa_orders()
+            for order in pending:
+                payment_id = order[7]
+                if payment_id:
+                    status = await check_yookassa_payment(payment_id)
+                    if status == "succeeded":
+                        await fulfill_yookassa_order(order)
+                    elif status == "canceled":
+                        complete_card_order(order[0])
+        except Exception as e:
+            logging.error(f"YooKassa auto-poll error: {e}")
+        await asyncio.sleep(8)
+
+# ----------------- MAIN RUNNER -----------------
+async def main():
+    init_db()
+    if not get_setting("yookassa_shop_id") and DEFAULT_YOOKASSA_SHOP_ID:
+        set_setting("yookassa_shop_id", DEFAULT_YOOKASSA_SHOP_ID)
+    if not get_setting("yookassa_secret_key") and DEFAULT_YOOKASSA_SECRET_KEY:
+        set_setting("yookassa_secret_key", DEFAULT_YOOKASSA_SECRET_KEY)
+    print("=" * 60)
+    print("🚀 Welwes VPN Bot starting...")
+    print(f"• Brand: {BRAND_NAME}")
+    print(f"• Promo: {ACTIVE_PROMO_CODE} (-{PROMO_DISCOUNT_PERCENT}%)")
+    print(f"• Friend Discount: -{FRIEND_DISCOUNT_PERCENT}% / Bonus: +{FRIEND_BONUS_HOURS}h")
+    print(f"• Master Sub URL: {MASTER_SUB_URL}")
+    print(f"• YooKassa ShopID: {DEFAULT_YOOKASSA_SHOP_ID} | Key: {DEFAULT_YOOKASSA_SECRET_KEY[:12]}... (active)")
+    
+    webapp_url = get_setting("webapp_url", DEFAULT_WEBAPP_URL)
+    if webapp_url:
+        try:
+            await bot.set_chat_menu_button(
+                menu_button=types.MenuButtonWebApp(
+                    text="Открыть VPN",
+                    web_app=types.WebAppInfo(url=webapp_url)
+                )
+            )
+            print(f"• WebApp Menu Button configured: {webapp_url}")
+        except Exception as e:
+            print(f"• Note on WebApp Menu Button: {e}")
+            
+    print("=" * 60)
+
+    asyncio.create_task(yookassa_auto_poll_loop())
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
